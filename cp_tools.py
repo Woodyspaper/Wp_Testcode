@@ -29,7 +29,7 @@ CUSTOMERS_SQL = """
 SELECT {top}
     CUST_NO, NAM, FST_NAM, LST_NAM, EMAIL_ADRS_1, PHONE_1,
     ADRS_1, ADRS_2, CITY, STATE, ZIP_COD, CNTRY,
-    CUST_TYP, CATEG_COD, PRC_COD, TERMS_COD, TAX_COD
+    CUST_TYP, CATEG_COD, TERMS_COD, TAX_COD
 FROM dbo.AR_CUST
 WHERE IS_ECOMM_CUST = 'Y'
 ORDER BY CUST_NO
@@ -37,12 +37,12 @@ ORDER BY CUST_NO
 
 PRICING_RULES_SQL = """
 SELECT 
-    r.RUL_SEQ_NO, r.DESCR, r.PRC_COD, r.CUST_NO, r.ITEM_NO,
-    r.CATEG_COD, r.PRC_METH, r.PRC_AMT, r.MIN_QTY, r.MAX_QTY,
-    r.BEG_DAT, r.END_DAT
+    r.RUL_SEQ_NO, r.DESCR, r.GRP_TYP, r.GRP_COD, r.CUST_NO, r.ITEM_NO,
+    r.MIN_QTY AS RULE_MIN_QTY,
+    b.PRC_METH, b.PRC_BASIS, b.AMT_OR_PCT, b.MIN_QTY AS BRK_MIN_QTY
 FROM dbo.IM_PRC_RUL r
-WHERE (r.END_DAT IS NULL OR r.END_DAT >= GETDATE())
-  AND (r.BEG_DAT IS NULL OR r.BEG_DAT <= GETDATE())
+LEFT JOIN dbo.IM_PRC_RUL_BRK b ON r.GRP_TYP = b.GRP_TYP 
+    AND r.GRP_COD = b.GRP_COD AND r.RUL_SEQ_NO = b.RUL_SEQ_NO
 ORDER BY r.RUL_SEQ_NO
 """
 
@@ -82,7 +82,7 @@ def customer_to_woo_payload(c):
         },
         "meta_data": [
             {"key": "cp_cust_no", "value": c["CUST_NO"]},
-            {"key": "cp_price_code", "value": c.get("PRC_COD", "")},
+            {"key": "cp_categ_cod", "value": c.get("CATEG_COD", "")},
         ],
     }
 
@@ -102,27 +102,21 @@ def validate_pricing_rules(rules):
     
     Checks:
       - Discount 0-90%
-      - Begin date <= end date  
-      - Has at least one target (customer, item, or price code)
+      - Has at least one target (customer, item, or group)
     """
     valid, errors = [], []
     
     for r in rules:
         rule_id = r.get("RUL_SEQ_NO", "?")
-        amt = r.get("PRC_AMT") or 0
+        amt = r.get("AMT_OR_PCT") or 0
         
         # Check discount range
         if r.get("PRC_METH") == "D" and (amt < 0 or amt > 90):
             errors.append(f"Rule {rule_id}: Discount {amt}% out of range (0-90)")
             continue
         
-        # Check date range
-        if r.get("BEG_DAT") and r.get("END_DAT") and r["BEG_DAT"] > r["END_DAT"]:
-            errors.append(f"Rule {rule_id}: Begin date after end date")
-            continue
-        
         # Check has target
-        if not any([r.get("CUST_NO"), r.get("ITEM_NO"), r.get("PRC_COD"), r.get("CATEG_COD")]):
+        if not any([r.get("CUST_NO"), r.get("ITEM_NO"), r.get("GRP_COD")]):
             errors.append(f"Rule {rule_id}: No target specified")
             continue
         
@@ -238,11 +232,11 @@ def main():
     
     if cmd == "customers":
         customers = get_customers(limit or 10)
-        print(f"\n{'CUST_NO':<15} {'NAME':<30} {'EMAIL':<30} {'PRC_COD':<10}")
+        print(f"\n{'CUST_NO':<15} {'NAME':<30} {'EMAIL':<30} {'CATEG':<10}")
         print("-" * 90)
         for c in customers:
             print(f"{c['CUST_NO']:<15} {(c.get('NAM') or '')[:30]:<30} "
-                  f"{(c.get('EMAIL_ADRS_1') or '')[:30]:<30} {c.get('PRC_COD') or '':<10}")
+                  f"{(c.get('EMAIL_ADRS_1') or '')[:30]:<30} {c.get('CATEG_COD') or '':<10}")
         print(f"\nTotal: {len(customers)} customers")
     
     elif cmd == "pricing":
