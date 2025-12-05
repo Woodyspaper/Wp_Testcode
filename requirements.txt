@@ -1,0 +1,7 @@
+pyodbc>=4.0.39
+requests>=2.32.3
+python-dotenv>=1.0.1
+pytest>=8.3.3
+pytest-mock>=3.14.0
+requests-mock>=1.12.1
+

@@ -1,0 +1,9 @@
+.env
+__pycache__/
+.pytest_cache/
+*.log
+*.pyc
+# Ignore env templates and local env variants
+.env.example
+.env.*
+
