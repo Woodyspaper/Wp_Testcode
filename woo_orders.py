@@ -1,0 +1,474 @@
+"""
+woo_orders.py - Pull WooCommerce orders into CounterPoint staging
+
+This pulls orders from WooCommerce and stages them for import into CounterPoint.
+Orders go into USER_ORDER_STAGING for review before creating in PS_DOC_HDR.
+
+Usage:
+    python woo_orders.py list                  # List recent Woo orders
+    python woo_orders.py pull                  # Pull new orders to staging (dry-run)
+    python woo_orders.py pull --apply          # Pull new orders to staging (live)
+    python woo_orders.py pull --days 7         # Pull orders from last 7 days
+    python woo_orders.py status 12345          # Check status of a specific order
+"""
+
+import sys
+import json
+from datetime import datetime, timedelta
+from typing import List, Dict, Optional, Tuple
+
+from database import run_query, get_connection
+from woo_client import WooClient
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQL QUERIES
+# ─────────────────────────────────────────────────────────────────────────────
+
+FIND_STAGED_ORDER_SQL = """
+SELECT STAGING_ID, WOO_ORDER_ID, CUST_NO, TOT_AMT, IS_APPLIED, CP_DOC_ID
+FROM dbo.USER_ORDER_STAGING
+WHERE WOO_ORDER_ID = ?
+"""
+
+FIND_CUSTOMER_BY_EMAIL_SQL = """
+SELECT CUST_NO, NAM FROM dbo.AR_CUST WHERE EMAIL_ADRS_1 = ?
+"""
+
+FIND_CUSTOMER_BY_WOO_ID_SQL = """
+SELECT m.CUST_NO, c.NAM 
+FROM dbo.USER_CUSTOMER_MAP m
+JOIN dbo.AR_CUST c ON c.CUST_NO = m.CUST_NO
+WHERE m.WOO_USER_ID = ? AND m.IS_ACTIVE = 1
+"""
+
+GET_RECENT_STAGED_ORDERS_SQL = """
+SELECT TOP 50
+    WOO_ORDER_ID, CUST_NO, CUST_EMAIL, ORD_DAT, ORD_STATUS,
+    TOT_AMT, IS_VALIDATED, IS_APPLIED, CP_DOC_ID, VALIDATION_ERROR
+FROM dbo.USER_ORDER_STAGING
+ORDER BY CREATED_DT DESC
+"""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPER FUNCTIONS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def resolve_customer(woo_order: Dict) -> Optional[str]:
+    """
+    Try to resolve WooCommerce order to CounterPoint customer.
+    
+    Resolution order:
+    1. Check USER_CUSTOMER_MAP by Woo customer ID
+    2. Check AR_CUST by billing email
+    3. Return None if not found
+    """
+    # Try by Woo customer ID
+    woo_cust_id = woo_order.get('customer_id')
+    if woo_cust_id and woo_cust_id > 0:
+        result = run_query(FIND_CUSTOMER_BY_WOO_ID_SQL, (woo_cust_id,), suppress_errors=True)
+        if result:
+            return result[0]['CUST_NO']
+    
+    # Try by email
+    billing = woo_order.get('billing', {})
+    email = billing.get('email')
+    if email:
+        result = run_query(FIND_CUSTOMER_BY_EMAIL_SQL, (email,), suppress_errors=True)
+        if result:
+            return result[0]['CUST_NO']
+    
+    return None
+
+
+def woo_order_to_staging(order: Dict) -> Dict:
+    """Convert WooCommerce order to staging table format."""
+    billing = order.get('billing', {})
+    shipping = order.get('shipping', {})
+    
+    # Use shipping address if different from billing
+    ship = shipping if shipping.get('address_1') else billing
+    
+    # Build line items JSON
+    line_items = []
+    for item in order.get('line_items', []):
+        line_items.append({
+            'sku': item.get('sku'),
+            'name': item.get('name'),
+            'quantity': item.get('quantity'),
+            'price': item.get('price'),
+            'total': item.get('total'),
+            'product_id': item.get('product_id'),
+        })
+    
+    return {
+        'WOO_ORDER_ID': order['id'],
+        'WOO_ORDER_NO': order.get('number'),
+        'CUST_EMAIL': billing.get('email'),
+        'ORD_DAT': order.get('date_created', '')[:10],  # YYYY-MM-DD
+        'ORD_STATUS': order.get('status'),
+        'PMT_METH': order.get('payment_method_title'),
+        'SHIP_VIA': order.get('shipping_lines', [{}])[0].get('method_title') if order.get('shipping_lines') else None,
+        'SUBTOT': float(order.get('total', 0)) - float(order.get('shipping_total', 0)) - float(order.get('total_tax', 0)),
+        'SHIP_AMT': float(order.get('shipping_total', 0)),
+        'TAX_AMT': float(order.get('total_tax', 0)),
+        'DISC_AMT': float(order.get('discount_total', 0)),
+        'TOT_AMT': float(order.get('total', 0)),
+        'SHIP_NAM': f"{ship.get('first_name', '')} {ship.get('last_name', '')}".strip(),
+        'SHIP_ADRS_1': ship.get('address_1'),
+        'SHIP_ADRS_2': ship.get('address_2'),
+        'SHIP_CITY': ship.get('city'),
+        'SHIP_STATE': ship.get('state'),
+        'SHIP_ZIP_COD': ship.get('postcode'),
+        'SHIP_CNTRY': ship.get('country'),
+        'SHIP_PHONE': billing.get('phone'),
+        'LINE_ITEMS_JSON': json.dumps(line_items),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LIST ORDERS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def list_woo_orders(days: int = 30, status: str = 'any') -> List[Dict]:
+    """List recent WooCommerce orders."""
+    client = WooClient()
+    
+    params = {
+        'per_page': 50,
+        'orderby': 'date',
+        'order': 'desc',
+    }
+    
+    if status != 'any':
+        params['status'] = status
+    
+    if days:
+        after_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%dT00:00:00')
+        params['after'] = after_date
+    
+    url = client._url("/orders")
+    resp = client.session.get(url, params=params, timeout=30)
+    
+    if not resp.ok:
+        print(f"Error fetching orders: {resp.status_code} {resp.text[:200]}")
+        return []
+    
+    orders = resp.json()
+    
+    print(f"\n{'='*80}")
+    print(f"WooCommerce Orders (last {days} days)")
+    print(f"{'='*80}")
+    print(f"\n{'ORDER':<10} {'DATE':<12} {'STATUS':<12} {'CUSTOMER':<25} {'TOTAL':>10}")
+    print("-" * 80)
+    
+    for o in orders:
+        billing = o.get('billing', {})
+        name = f"{billing.get('first_name', '')} {billing.get('last_name', '')}".strip()
+        if not name:
+            name = billing.get('email', 'Guest')[:25]
+        print(f"#{o['id']:<9} {o.get('date_created', '')[:10]:<12} {o.get('status', ''):<12} "
+              f"{name[:25]:<25} ${float(o.get('total', 0)):>9.2f}")
+    
+    print(f"\nTotal: {len(orders)} orders")
+    return orders
+
+
+def list_staged_orders():
+    """List orders in staging table."""
+    orders = run_query(GET_RECENT_STAGED_ORDERS_SQL)
+    
+    if not orders:
+        print("No orders in staging table.")
+        return
+    
+    print(f"\n{'='*90}")
+    print("Staged Orders (USER_ORDER_STAGING)")
+    print(f"{'='*90}")
+    print(f"\n{'WOO_ID':<10} {'CUST_NO':<12} {'DATE':<12} {'STATUS':<12} {'TOTAL':>10} {'APPLIED':<8} {'CP_DOC':<12}")
+    print("-" * 90)
+    
+    for o in orders:
+        applied = 'Yes' if o['IS_APPLIED'] else 'No'
+        cp_doc = o['CP_DOC_ID'] or '-'
+        date_str = str(o.get('ORD_DAT', ''))[:10]
+        print(f"{o['WOO_ORDER_ID']:<10} {(o['CUST_NO'] or 'UNMAPPED'):<12} {date_str:<12} "
+              f"{(o['ORD_STATUS'] or ''):<12} ${o['TOT_AMT']:>9.2f} {applied:<8} {cp_doc:<12}")
+    
+    print(f"\nTotal: {len(orders)} staged orders")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PULL ORDERS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def pull_orders(days: int = 30, dry_run: bool = True) -> Tuple[int, int, int]:
+    """
+    Pull WooCommerce orders into USER_ORDER_STAGING.
+    
+    Returns: (new_orders, skipped, errors)
+    """
+    client = WooClient()
+    
+    print(f"\n{'='*60}")
+    print(f"{'DRY RUN - ' if dry_run else ''}Pull Orders: WooCommerce → CP Staging")
+    print(f"{'='*60}")
+    
+    # Fetch orders from Woo
+    params = {
+        'per_page': 100,
+        'orderby': 'date',
+        'order': 'desc',
+        'status': 'processing,completed',  # Only paid orders
+    }
+    
+    if days:
+        after_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%dT00:00:00')
+        params['after'] = after_date
+        print(f"Fetching orders since: {after_date[:10]}")
+    
+    url = client._url("/orders")
+    resp = client.session.get(url, params=params, timeout=60)
+    
+    if not resp.ok:
+        print(f"Error: {resp.status_code} {resp.text[:200]}")
+        return 0, 0, 1
+    
+    woo_orders = resp.json()
+    print(f"WooCommerce orders found: {len(woo_orders)}")
+    
+    # Check which are already staged
+    new_orders = []
+    skipped = 0
+    
+    for order in woo_orders:
+        existing = run_query(FIND_STAGED_ORDER_SQL, (order['id'],), suppress_errors=True)
+        if existing:
+            skipped += 1
+        else:
+            new_orders.append(order)
+    
+    print(f"Already staged: {skipped}")
+    print(f"New to stage: {len(new_orders)}")
+    
+    if not new_orders:
+        print("\nNo new orders to pull.")
+        return 0, skipped, 0
+    
+    # Preview
+    print(f"\n{'ORDER':<10} {'CUSTOMER':<30} {'TOTAL':>10} {'CP_CUST':<12}")
+    print("-" * 70)
+    
+    for o in new_orders[:10]:
+        billing = o.get('billing', {})
+        name = f"{billing.get('first_name', '')} {billing.get('last_name', '')}".strip()[:30]
+        cp_cust = resolve_customer(o) or 'NOT MAPPED'
+        print(f"#{o['id']:<9} {name:<30} ${float(o.get('total', 0)):>9.2f} {cp_cust:<12}")
+    
+    if len(new_orders) > 10:
+        print(f"... and {len(new_orders) - 10} more")
+    
+    if dry_run:
+        print(f"\n⚠️  DRY RUN - No changes made")
+        print("    To import to staging, add --apply flag")
+        return len(new_orders), skipped, 0
+    
+    # Insert into staging
+    batch_id = f"WOO_ORDERS_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    staged = 0
+    errors = 0
+    
+    try:
+        for order in new_orders:
+            try:
+                data = woo_order_to_staging(order)
+                cp_cust = resolve_customer(order)
+                
+                cursor.execute("""
+                    INSERT INTO dbo.USER_ORDER_STAGING (
+                        BATCH_ID, WOO_ORDER_ID, WOO_ORDER_NO,
+                        CUST_NO, CUST_EMAIL,
+                        ORD_DAT, ORD_STATUS, PMT_METH, SHIP_VIA,
+                        SUBTOT, SHIP_AMT, TAX_AMT, DISC_AMT, TOT_AMT,
+                        SHIP_NAM, SHIP_ADRS_1, SHIP_ADRS_2, 
+                        SHIP_CITY, SHIP_STATE, SHIP_ZIP_COD, SHIP_CNTRY, SHIP_PHONE,
+                        LINE_ITEMS_JSON
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    batch_id,
+                    data['WOO_ORDER_ID'],
+                    data['WOO_ORDER_NO'],
+                    cp_cust,
+                    data['CUST_EMAIL'],
+                    data['ORD_DAT'],
+                    data['ORD_STATUS'],
+                    data['PMT_METH'],
+                    data['SHIP_VIA'],
+                    data['SUBTOT'],
+                    data['SHIP_AMT'],
+                    data['TAX_AMT'],
+                    data['DISC_AMT'],
+                    data['TOT_AMT'],
+                    data['SHIP_NAM'],
+                    data['SHIP_ADRS_1'],
+                    data['SHIP_ADRS_2'],
+                    data['SHIP_CITY'],
+                    data['SHIP_STATE'],
+                    data['SHIP_ZIP_COD'],
+                    data['SHIP_CNTRY'],
+                    data['SHIP_PHONE'],
+                    data['LINE_ITEMS_JSON'],
+                ))
+                staged += 1
+                
+            except Exception as e:
+                errors += 1
+                print(f"  ✗ Error staging order #{order['id']}: {e}")
+        
+        conn.commit()
+    finally:
+        cursor.close()
+        conn.close()
+    
+    print(f"\n{'='*60}")
+    print(f"✓ Staged {staged} orders (Batch: {batch_id})")
+    print(f"  Errors: {errors}")
+    print(f"{'='*60}")
+    
+    print(f"\nNext steps:")
+    print(f"  1. Review: SELECT * FROM USER_ORDER_STAGING WHERE BATCH_ID = '{batch_id}'")
+    print(f"  2. Map unmapped customers")
+    print(f"  3. Validate: Check line items have matching ITEM_NO in IM_ITEM")
+    print(f"  4. Apply to PS_DOC_HDR (requires CounterPoint-specific procedure)")
+    
+    return staged, skipped, errors
+
+
+def get_order_status(woo_order_id: int):
+    """Check status of a specific order in both Woo and CP staging."""
+    # Check staging
+    staged = run_query(FIND_STAGED_ORDER_SQL, (woo_order_id,))
+    
+    # Check Woo
+    client = WooClient()
+    url = client._url(f"/orders/{woo_order_id}")
+    resp = client.session.get(url, timeout=30)
+    
+    print(f"\n{'='*60}")
+    print(f"Order Status: #{woo_order_id}")
+    print(f"{'='*60}")
+    
+    if resp.ok:
+        woo = resp.json()
+        billing = woo.get('billing', {})
+        print(f"\nWooCommerce:")
+        print(f"  Status: {woo.get('status')}")
+        print(f"  Date: {woo.get('date_created', '')[:10]}")
+        print(f"  Customer: {billing.get('first_name')} {billing.get('last_name')}")
+        print(f"  Email: {billing.get('email')}")
+        print(f"  Total: ${float(woo.get('total', 0)):.2f}")
+        print(f"  Items: {len(woo.get('line_items', []))}")
+    else:
+        print(f"\nWooCommerce: Not found ({resp.status_code})")
+    
+    if staged:
+        s = staged[0]
+        print(f"\nCP Staging:")
+        print(f"  CUST_NO: {s['CUST_NO'] or 'NOT MAPPED'}")
+        print(f"  Total: ${s['TOT_AMT']:.2f}")
+        print(f"  Applied: {'Yes' if s['IS_APPLIED'] else 'No'}")
+        print(f"  CP_DOC_ID: {s['CP_DOC_ID'] or 'N/A'}")
+    else:
+        print(f"\nCP Staging: Not staged")
+    
+    print(f"{'='*60}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CLI
+# ─────────────────────────────────────────────────────────────────────────────
+
+def print_help():
+    print("""
+woo_orders.py - Pull WooCommerce Orders to CounterPoint
+========================================================
+
+COMMANDS:
+
+  list                          List recent WooCommerce orders
+  list --days 7                 List orders from last 7 days
+  staged                        List orders in CP staging table
+  
+  pull                          Pull new orders to staging (dry-run)
+  pull --apply                  Pull new orders to staging (live)
+  pull --days 7 --apply         Pull last 7 days of orders
+  
+  status <WOO_ORDER_ID>         Check status of specific order
+
+WORKFLOW:
+
+  1. View recent orders:
+     python woo_orders.py list
+
+  2. Pull to staging (dry-run first):
+     python woo_orders.py pull --days 7
+     python woo_orders.py pull --days 7 --apply
+
+  3. Review staged orders:
+     python woo_orders.py staged
+
+  4. Check specific order:
+     python woo_orders.py status 12345
+
+NOTE: Creating orders in PS_DOC_HDR requires CounterPoint-specific
+stored procedures. The staging table prepares the data for that step.
+""")
+
+
+def main():
+    args = sys.argv[1:]
+    
+    if not args or args[0] in ['help', '-h', '--help']:
+        print_help()
+        return
+    
+    cmd = args[0].lower()
+    apply_flag = '--apply' in args
+    
+    # Parse --days N
+    days = 30
+    if '--days' in args:
+        idx = args.index('--days')
+        if idx + 1 < len(args):
+            try:
+                days = int(args[idx + 1])
+            except ValueError:
+                pass
+    
+    if cmd == 'list':
+        list_woo_orders(days=days)
+    
+    elif cmd == 'staged':
+        list_staged_orders()
+    
+    elif cmd == 'pull':
+        pull_orders(days=days, dry_run=not apply_flag)
+    
+    elif cmd == 'status' and len(args) > 1:
+        try:
+            order_id = int(args[1])
+            get_order_status(order_id)
+        except ValueError:
+            print("Error: Order ID must be a number")
+    
+    else:
+        print(f"Unknown command: {cmd}")
+        print_help()
+
+
+if __name__ == "__main__":
+    main()

@@ -72,13 +72,18 @@ def connection_ctx() -> Generator[pyodbc.Connection, None, None]:
         conn.close()
 
 
-def run_query(sql: str, params: Optional[Iterable[Any]] = None) -> List[Dict[str, Any]]:
+def run_query(
+    sql: str, 
+    params: Optional[Iterable[Any]] = None,
+    suppress_errors: bool = False
+) -> List[Dict[str, Any]]:
     """
     Execute a read-only query and return rows as list[dict].
 
     Args:
         sql: Parameterized SQL statement.
         params: Optional iterable of parameter values.
+        suppress_errors: If True, silently return [] on errors without logging.
 
     Returns:
         List of dictionaries mapping column names to values.
@@ -97,7 +102,8 @@ def run_query(sql: str, params: Optional[Iterable[Any]] = None) -> List[Dict[str
             logger.info("Fetched %d rows", len(rows))
             return rows
     except pyodbc.Error as exc:
-        logger.exception("Database query failed: %s", exc)
+        if not suppress_errors:
+            logger.exception("Database query failed: %s", exc)
         return []
 
 
