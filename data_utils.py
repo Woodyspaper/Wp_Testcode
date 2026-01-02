@@ -104,6 +104,7 @@ DISPOSABLE_DOMAINS = {
     'spam4.me', 'yopmail.com', 'temp-mail.org', 'dispostable.com',
     'getnada.com', 'maildrop.cc', 'mintemail.com', 'emailondeck.com',
     'guerrillamail.info', 'grr.la', 'discard.email', 'discardmail.com',
+    'bonggdalu.site',  # Known spam domain (reported Jan 2026)
 }
 
 
