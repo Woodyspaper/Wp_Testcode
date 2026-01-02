@@ -35,8 +35,8 @@
 
 **What was configured:**
 - ✅ API keys generated and added:
-  - `CONTRACT_PRICING_API_KEY=w0YyAKgirU1l2LXoa3kG4mR8vdSbqxzj`
-  - `CP_ORDERS_API_KEY=9PtgrQyaR0GoDsd4wJVuL52mec6p7SvZ`
+  - `CONTRACT_PRICING_API_KEY=<your-api-key-here>`
+  - `CP_ORDERS_API_KEY=<your-api-key-here>`
 
 **Remaining .env configuration (verify these are set):**
 - [ ] `CP_SQL_SERVER` - SQL Server name/IP
@@ -137,7 +137,7 @@
 - ✅ Plugin activated: "WooCommerce Contract Pricing (Enhanced)"
 - ✅ Plugin configured with correct settings:
   - API URL: `http://10.1.10.49:5000/api/contract-price`
-  - API Key: `w0YyAKgirU1l2LXoa3kG4mR8vdSbqxzj`
+  - API Key: `<your-api-key-here>`
   - Cache TTL: `300`
 - ✅ Settings saved successfully
 

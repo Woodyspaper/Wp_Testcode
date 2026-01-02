@@ -183,7 +183,7 @@ Get-Service ContractPricingAPIWaitress
 **Test API:**
 ```powershell
 $body = @{ ncr_bid_no = "144319"; item_no = "01-10100"; quantity = 50.0 } | ConvertTo-Json
-$headers = @{ "Content-Type" = "application/json"; "X-API-Key" = "w0YyAKgirU1l2LXoa3kG4mR8vdSbqxzj" }
+$headers = @{ "Content-Type" = "application/json"; "X-API-Key" = "<your-api-key-here>" }
 Invoke-RestMethod -Uri "http://localhost:5000/api/contract-price" -Method POST -Body $body -Headers $headers
 ```
 

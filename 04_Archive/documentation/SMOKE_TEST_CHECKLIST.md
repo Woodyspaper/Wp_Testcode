@@ -9,7 +9,7 @@
 
 **Plugin Settings:**
 - ✅ API URL: `http://10.1.10.49:5000/api/contract-price`
-- ✅ API Key: `w0YyAKgirU1l2LXoa3kG4mR8vdSbqxzj`
+- ✅ API Key: `<your-api-key-here>`
 - ✅ Cache TTL: `300`
 
 **All settings saved successfully!**
@@ -80,7 +80,7 @@ $body = @{
 
 $headers = @{
     "Content-Type" = "application/json"
-    "X-API-Key" = "w0YyAKgirU1l2LXoa3kG4mR8vdSbqxzj"
+    "X-API-Key" = "<your-api-key-here>"
 }
 
 Invoke-RestMethod -Uri "http://localhost:5000/api/contract-price" -Method POST -Body $body -Headers $headers

@@ -2,7 +2,7 @@
 # Date: December 30, 2025
 
 $apiUrl = "http://localhost:5000/api/contract-price"
-$apiKey = "w0YyAKgirU1l2LXoa3kG4mR8vdSbqxzj"
+$apiKey = "<your-api-key-here>"  # Get from .env file: CONTRACT_PRICING_API_KEY
 
 Write-Host "`n========================================" -ForegroundColor Cyan
 Write-Host "Contract Pricing API Direct Test" -ForegroundColor Cyan

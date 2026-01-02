@@ -9,12 +9,20 @@ dist/
 build/
 *.pyc
 
-# Environment
+# Environment & Credentials
 .env
+.env.*
+!.env.example
 .env.local
+.env.production
+.env.development
 .venv
 venv/
 ENV/
+*secret*
+*password*
+*credential*
+*api_key*
 
 # IDE
 .vscode/
