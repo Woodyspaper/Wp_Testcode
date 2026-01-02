@@ -1,0 +1,32 @@
+-- Discover actual column names in AR_CUST table
+-- Date: December 30, 2025
+
+-- Method 1: Get all column names
+SELECT 
+    COLUMN_NAME,
+    DATA_TYPE,
+    IS_NULLABLE,
+    CHARACTER_MAXIMUM_LENGTH
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'dbo'
+  AND TABLE_NAME = 'AR_CUST'
+ORDER BY ORDINAL_POSITION;
+
+-- Method 2: Get sample data to see column names
+SELECT TOP 1 *
+FROM dbo.AR_CUST;
+
+-- Method 3: Search for NCR-related columns
+SELECT 
+    COLUMN_NAME,
+    DATA_TYPE
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = 'dbo'
+  AND TABLE_NAME = 'AR_CUST'
+  AND (
+      COLUMN_NAME LIKE '%NCR%'
+      OR COLUMN_NAME LIKE '%BID%'
+      OR COLUMN_NAME LIKE '%CUST%'
+      OR COLUMN_NAME LIKE '%NAM%'
+  )
+ORDER BY COLUMN_NAME;

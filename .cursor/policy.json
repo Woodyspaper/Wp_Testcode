@@ -1,0 +1,32 @@
+{
+  "project": "WoodysPaper",
+  "guardrails": {
+    "authority": {
+      "source_of_truth": "CounterPoint",
+      "woocommerce_role": "display_and_intake_only"
+    },
+    "hard_stops": [
+      "pricing_calculation_change",
+      "inventory_logic_change",
+      "tax_logic_change",
+      "shipping_rate_logic_change",
+      "payment_gateway_change",
+      "direct_db_write",
+      "woocommerce_core_edit"
+    ],
+    "preferred_change_order": [
+      "native_settings",
+      "child_theme_override",
+      "code_snippets_small",
+      "custom_plugin"
+    ],
+    "required_output_fields": [
+      "responsible_component",
+      "minimal_fix",
+      "rollback",
+      "test_plan"
+    ]
+  }
+}
+
+

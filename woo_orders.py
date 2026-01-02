@@ -19,6 +19,11 @@ from typing import List, Dict, Optional, Tuple
 
 from database import run_query, get_connection
 from woo_client import WooClient
+from data_utils import (
+    sanitize_string, sanitize_amount, normalize_phone,
+    normalize_state, split_long_address, normalize_sku,
+    validate_email, convert_woo_date_to_local, FIELD_LIMITS,
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -31,8 +36,34 @@ FROM dbo.USER_ORDER_STAGING
 WHERE WOO_ORDER_ID = ?
 """
 
+CHECK_DUPLICATE_ORDER_SQL = """
+SELECT 
+    s.STAGING_ID,
+    s.WOO_ORDER_ID,
+    s.WOO_ORDER_NO,
+    s.IS_APPLIED,
+    s.CP_DOC_ID,
+    s.CREATED_DT,
+    CASE 
+        WHEN s.IS_APPLIED = 1 AND s.CP_DOC_ID IS NOT NULL THEN 'COMPLETED'
+        WHEN s.IS_APPLIED = 1 THEN 'APPLIED'
+        WHEN s.IS_VALIDATED = 1 THEN 'VALIDATED'
+        ELSE 'PENDING'
+    END AS STATUS
+FROM dbo.USER_ORDER_STAGING s
+WHERE s.WOO_ORDER_ID = ? OR s.WOO_ORDER_NO = ?
+"""
+
 FIND_CUSTOMER_BY_EMAIL_SQL = """
 SELECT CUST_NO, NAM FROM dbo.AR_CUST WHERE EMAIL_ADRS_1 = ?
+"""
+
+FIND_ITEM_BY_SKU_SQL = """
+SELECT ITEM_NO, DESCR, STAT FROM dbo.IM_ITEM WHERE ITEM_NO = ?
+"""
+
+FIND_ITEMS_BY_SKUS_SQL = """
+SELECT ITEM_NO, DESCR, STAT FROM dbo.IM_ITEM WHERE ITEM_NO IN ({placeholders})
 """
 
 FIND_CUSTOMER_BY_WOO_ID_SQL = """
@@ -54,6 +85,120 @@ ORDER BY CREATED_DT DESC
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPER FUNCTIONS
 # ─────────────────────────────────────────────────────────────────────────────
+
+def check_duplicate_order(woo_order_id: int, woo_order_no: str = None) -> Optional[Dict]:
+    """
+    Check if an order has already been staged or processed.
+    
+    Returns:
+        Dict with duplicate info if found, None otherwise
+        
+    Duplicate info includes:
+    - staging_id: Existing staging record ID
+    - status: 'PENDING', 'VALIDATED', 'APPLIED', 'COMPLETED'
+    - cp_doc_id: CounterPoint document ID (if applied)
+    - created_dt: When the staging record was created
+    """
+    result = run_query(
+        CHECK_DUPLICATE_ORDER_SQL, 
+        (woo_order_id, woo_order_no or str(woo_order_id)),
+        suppress_errors=True
+    )
+    
+    if result and len(result) > 0:
+        r = result[0]
+        return {
+            'staging_id': r['STAGING_ID'],
+            'woo_order_id': r['WOO_ORDER_ID'],
+            'status': r['STATUS'],
+            'cp_doc_id': r['CP_DOC_ID'],
+            'created_dt': r['CREATED_DT'],
+            'is_duplicate': True
+        }
+    
+    return None
+
+
+def validate_order_skus(line_items: List[Dict]) -> Tuple[List[Dict], List[str]]:
+    """
+    Validate SKUs in order line items against CounterPoint IM_ITEM.
+    
+    Returns:
+        Tuple of (validated_items, warnings)
+        
+    Each validated item includes:
+    - cp_item_no: matched CounterPoint ITEM_NO (or None)
+    - cp_item_descr: CounterPoint item description
+    - cp_item_stat: Item status (A=Active, D=Discontinued, etc.)
+    - sku_match_status: 'MATCHED', 'NOT_FOUND', 'DISCONTINUED', 'NO_SKU'
+    """
+    if not line_items:
+        return [], []
+    
+    # Collect all SKUs that need validation
+    skus_to_check = [item['sku'] for item in line_items if item.get('sku')]
+    
+    if not skus_to_check:
+        # All items missing SKUs
+        return [
+            {**item, 'cp_item_no': None, 'cp_item_descr': None, 
+             'cp_item_stat': None, 'sku_match_status': 'NO_SKU'}
+            for item in line_items
+        ], ['All line items are missing SKUs']
+    
+    # Query CounterPoint for all SKUs at once
+    placeholders = ','.join(['?' for _ in skus_to_check])
+    query = FIND_ITEMS_BY_SKUS_SQL.format(placeholders=placeholders)
+    
+    try:
+        results = run_query(query, tuple(skus_to_check), suppress_errors=True)
+        cp_items = {r['ITEM_NO']: r for r in results} if results else {}
+    except Exception:
+        cp_items = {}
+    
+    warnings = []
+    validated = []
+    
+    for item in line_items:
+        sku = item.get('sku', '')
+        
+        if not sku:
+            validated.append({
+                **item,
+                'cp_item_no': None,
+                'cp_item_descr': None,
+                'cp_item_stat': None,
+                'sku_match_status': 'NO_SKU'
+            })
+            warnings.append(f"Item '{item.get('name', 'Unknown')}' has no SKU")
+            continue
+        
+        if sku in cp_items:
+            cp_item = cp_items[sku]
+            status = 'MATCHED' if cp_item['STAT'] == 'A' else 'DISCONTINUED'
+            
+            if status == 'DISCONTINUED':
+                warnings.append(f"SKU '{sku}' is discontinued in CounterPoint")
+            
+            validated.append({
+                **item,
+                'cp_item_no': cp_item['ITEM_NO'],
+                'cp_item_descr': cp_item['DESCR'],
+                'cp_item_stat': cp_item['STAT'],
+                'sku_match_status': status
+            })
+        else:
+            validated.append({
+                **item,
+                'cp_item_no': None,
+                'cp_item_descr': None,
+                'cp_item_stat': None,
+                'sku_match_status': 'NOT_FOUND'
+            })
+            warnings.append(f"SKU '{sku}' not found in CounterPoint (item: {item.get('name', 'Unknown')})")
+    
+    return validated, warnings
+
 
 def resolve_customer(woo_order: Dict) -> Optional[str]:
     """
@@ -83,47 +228,137 @@ def resolve_customer(woo_order: Dict) -> Optional[str]:
 
 
 def woo_order_to_staging(order: Dict) -> Dict:
-    """Convert WooCommerce order to staging table format."""
+    """
+    Convert WooCommerce order to staging table format.
+    
+    Applies:
+    - String sanitization for all text fields
+    - Amount sanitization for monetary values
+    - Address overflow handling
+    - Phone normalization
+    - SKU normalization for line items
+    - Timezone conversion: WooCommerce UTC → local time (per sync-invariants.md #7)
+    
+    Date Fields:
+    - ORD_DAT: Local date only (YYYY-MM-DD) for CounterPoint
+    - ORD_DAT_UTC: Original UTC datetime for audit trail
+    - ORD_DATETIME_LOCAL: Full local datetime for precision matching
+    """
     billing = order.get('billing', {})
     shipping = order.get('shipping', {})
     
     # Use shipping address if different from billing
     ship = shipping if shipping.get('address_1') else billing
     
-    # Build line items JSON
+    # ─────────────────────────────────────────────────────────────────────────
+    # LINE ITEMS: Normalize SKUs for CounterPoint matching
+    # ─────────────────────────────────────────────────────────────────────────
     line_items = []
+    sku_warnings = []
+    
     for item in order.get('line_items', []):
+        raw_sku = item.get('sku', '')
+        normalized_sku = normalize_sku(raw_sku)
+        
+        # Track SKU issues
+        if not normalized_sku:
+            sku_warnings.append(f"Line item '{item.get('name', 'Unknown')}' has no SKU")
+        
         line_items.append({
-            'sku': item.get('sku'),
-            'name': item.get('name'),
-            'quantity': item.get('quantity'),
-            'price': item.get('price'),
-            'total': item.get('total'),
+            'sku': normalized_sku,
+            'sku_original': raw_sku,  # Keep original for troubleshooting
+            'name': sanitize_string(item.get('name', ''), 100),
+            'quantity': int(item.get('quantity', 0)),
+            'price': sanitize_amount(item.get('price')),
+            'total': sanitize_amount(item.get('total')),
             'product_id': item.get('product_id'),
         })
     
+    # ─────────────────────────────────────────────────────────────────────────
+    # SHIP_NAM: Prioritize company name for B2B
+    # ─────────────────────────────────────────────────────────────────────────
+    ship_company = sanitize_string(ship.get('company', ''))
+    ship_first = sanitize_string(ship.get('first_name', ''))
+    ship_last = sanitize_string(ship.get('last_name', ''))
+    ship_contact = f"{ship_first} {ship_last}".strip()
+    
+    if ship_company:
+        ship_nam = ship_company[:40]
+    else:
+        ship_nam = ship_contact[:40]
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # PHONE: normalize, check both billing and shipping
+    # ─────────────────────────────────────────────────────────────────────────
+    raw_phone = billing.get('phone', '').strip() or shipping.get('phone', '').strip()
+    phone = normalize_phone(raw_phone)
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # ADDRESS: handle overflow to address_2
+    # ─────────────────────────────────────────────────────────────────────────
+    raw_addr_1 = ship.get('address_1', '').strip()
+    raw_addr_2 = ship.get('address_2', '').strip()
+    
+    if len(raw_addr_1) > 40 and not raw_addr_2:
+        ship_addr_1, ship_addr_2 = split_long_address(raw_addr_1, 40)
+    else:
+        ship_addr_1 = sanitize_string(raw_addr_1, 40)
+        ship_addr_2 = sanitize_string(raw_addr_2, 40)
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # EMAIL: validate
+    # ─────────────────────────────────────────────────────────────────────────
+    raw_email = billing.get('email', '').strip()
+    email_valid, cust_email, email_warnings = validate_email(raw_email)
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # AMOUNTS: sanitize all monetary values
+    # ─────────────────────────────────────────────────────────────────────────
+    total = sanitize_amount(order.get('total'))
+    shipping_total = sanitize_amount(order.get('shipping_total'))
+    tax_total = sanitize_amount(order.get('total_tax'))
+    discount_total = sanitize_amount(order.get('discount_total'))
+    subtotal = total - shipping_total - tax_total
+    
+    # ─────────────────────────────────────────────────────────────────────────
+    # DATE: Convert WooCommerce UTC to local time (per sync-invariants.md #7)
+    # ─────────────────────────────────────────────────────────────────────────
+    woo_date_utc = order.get('date_created', '')
+    local_date = convert_woo_date_to_local(woo_date_utc, date_only=True)
+    local_datetime = convert_woo_date_to_local(woo_date_utc, date_only=False)
+    
     return {
         'WOO_ORDER_ID': order['id'],
-        'WOO_ORDER_NO': order.get('number'),
-        'CUST_EMAIL': billing.get('email'),
-        'ORD_DAT': order.get('date_created', '')[:10],  # YYYY-MM-DD
-        'ORD_STATUS': order.get('status'),
-        'PMT_METH': order.get('payment_method_title'),
-        'SHIP_VIA': order.get('shipping_lines', [{}])[0].get('method_title') if order.get('shipping_lines') else None,
-        'SUBTOT': float(order.get('total', 0)) - float(order.get('shipping_total', 0)) - float(order.get('total_tax', 0)),
-        'SHIP_AMT': float(order.get('shipping_total', 0)),
-        'TAX_AMT': float(order.get('total_tax', 0)),
-        'DISC_AMT': float(order.get('discount_total', 0)),
-        'TOT_AMT': float(order.get('total', 0)),
-        'SHIP_NAM': f"{ship.get('first_name', '')} {ship.get('last_name', '')}".strip(),
-        'SHIP_ADRS_1': ship.get('address_1'),
-        'SHIP_ADRS_2': ship.get('address_2'),
-        'SHIP_CITY': ship.get('city'),
-        'SHIP_STATE': ship.get('state'),
-        'SHIP_ZIP_COD': ship.get('postcode'),
-        'SHIP_CNTRY': ship.get('country'),
-        'SHIP_PHONE': billing.get('phone'),
+        'WOO_ORDER_NO': sanitize_string(str(order.get('number', '')), 15),
+        'CUST_EMAIL': cust_email,
+        'CUST_EMAIL_VALID': email_valid,
+        'ORD_DAT': local_date,  # Local date (converted from UTC)
+        'ORD_DAT_UTC': woo_date_utc[:19] if woo_date_utc else '',  # Original UTC for audit
+        'ORD_DATETIME_LOCAL': local_datetime,  # Full local datetime for precision
+        'ORD_STATUS': sanitize_string(order.get('status', ''), 20),
+        'PMT_METH': sanitize_string(order.get('payment_method_title', ''), 50),
+        'SHIP_VIA': sanitize_string(
+            order.get('shipping_lines', [{}])[0].get('method_title', '') 
+            if order.get('shipping_lines') else '', 
+            30
+        ),
+        'SUBTOT': subtotal,
+        'SHIP_AMT': shipping_total,
+        'TAX_AMT': tax_total,
+        'DISC_AMT': discount_total,
+        'TOT_AMT': total,
+        'SHIP_NAM': ship_nam,
+        'SHIP_ADRS_1': ship_addr_1,
+        'SHIP_ADRS_2': ship_addr_2,
+        'SHIP_CITY': sanitize_string(ship.get('city', ''), 20),
+        'SHIP_STATE': normalize_state(ship.get('state', '')),
+        'SHIP_ZIP_COD': sanitize_string(ship.get('postcode', ''), 15),
+        'SHIP_CNTRY': sanitize_string(ship.get('country', 'US'), 20).upper(),
+        'SHIP_PHONE': phone,
         'LINE_ITEMS_JSON': json.dumps(line_items),
+        # Validation metadata (not stored, used for warnings)
+        '_email_warnings': email_warnings,
+        '_sku_warnings': sku_warnings,
     }
 
 
@@ -168,7 +403,9 @@ def list_woo_orders(days: int = 30, status: str = 'any') -> List[Dict]:
         name = f"{billing.get('first_name', '')} {billing.get('last_name', '')}".strip()
         if not name:
             name = billing.get('email', 'Guest')[:25]
-        print(f"#{o['id']:<9} {o.get('date_created', '')[:10]:<12} {o.get('status', ''):<12} "
+        # Convert UTC to local for display
+        local_date = convert_woo_date_to_local(o.get('date_created', ''), date_only=True)
+        print(f"#{o['id']:<9} {local_date:<12} {o.get('status', ''):<12} "
               f"{name[:25]:<25} ${float(o.get('total', 0)):>9.2f}")
     
     print(f"\nTotal: {len(orders)} orders")
@@ -212,7 +449,7 @@ def pull_orders(days: int = 30, dry_run: bool = True) -> Tuple[int, int, int]:
     client = WooClient()
     
     print(f"\n{'='*60}")
-    print(f"{'DRY RUN - ' if dry_run else ''}Pull Orders: WooCommerce → CP Staging")
+    print(f"{'DRY RUN - ' if dry_run else ''}Pull Orders: WooCommerce -> CP Staging")
     print(f"{'='*60}")
     
     # Fetch orders from Woo
@@ -270,7 +507,7 @@ def pull_orders(days: int = 30, dry_run: bool = True) -> Tuple[int, int, int]:
         print(f"... and {len(new_orders) - 10} more")
     
     if dry_run:
-        print(f"\n⚠️  DRY RUN - No changes made")
+        print(f"\n[!] DRY RUN - No changes made")
         print("    To import to staging, add --apply flag")
         return len(new_orders), skipped, 0
     
@@ -327,7 +564,7 @@ def pull_orders(days: int = 30, dry_run: bool = True) -> Tuple[int, int, int]:
                 
             except Exception as e:
                 errors += 1
-                print(f"  ✗ Error staging order #{order['id']}: {e}")
+                print(f"  [ERR] Error staging order #{order['id']}: {e}")
         
         conn.commit()
     finally:
@@ -335,7 +572,7 @@ def pull_orders(days: int = 30, dry_run: bool = True) -> Tuple[int, int, int]:
         conn.close()
     
     print(f"\n{'='*60}")
-    print(f"✓ Staged {staged} orders (Batch: {batch_id})")
+    print(f"[OK] Staged {staged} orders (Batch: {batch_id})")
     print(f"  Errors: {errors}")
     print(f"{'='*60}")
     
@@ -365,9 +602,15 @@ def get_order_status(woo_order_id: int):
     if resp.ok:
         woo = resp.json()
         billing = woo.get('billing', {})
+        # Convert UTC to local for display
+        woo_date_utc = woo.get('date_created', '')
+        local_date = convert_woo_date_to_local(woo_date_utc, date_only=True)
+        local_datetime = convert_woo_date_to_local(woo_date_utc, date_only=False)
         print(f"\nWooCommerce:")
         print(f"  Status: {woo.get('status')}")
-        print(f"  Date: {woo.get('date_created', '')[:10]}")
+        print(f"  Date (local): {local_date}")
+        print(f"  DateTime (local): {local_datetime}")
+        print(f"  DateTime (UTC): {woo_date_utc[:19] if woo_date_utc else 'N/A'}")
         print(f"  Customer: {billing.get('first_name')} {billing.get('last_name')}")
         print(f"  Email: {billing.get('email')}")
         print(f"  Total: ${float(woo.get('total', 0)):.2f}")

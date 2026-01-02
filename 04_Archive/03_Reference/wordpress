@@ -1,0 +1,290 @@
+<?php
+/**
+ * Plugin Name: WooCommerce Contract Pricing
+ * Description: Applies NCR contract pricing from CounterPoint to WooCommerce products
+ * Version: 1.0.0
+ * Author: Woody's Paper Integration
+ * 
+ * This plugin integrates CounterPoint contract pricing with WooCommerce:
+ * - Applies contract prices based on customer's NCR BID #
+ * - Handles quantity breaks
+ * - Falls back to tier pricing if no contract
+ * - Caches prices for performance
+ */
+
+if (!defined('ABSPATH')) {
+    exit; // Exit if accessed directly
+}
+
+/**
+ * Get contract price from CounterPoint database via Python API
+ * 
+ * @param string $ncr_bid_no Customer's NCR BID #
+ * @param string $item_no Product SKU
+ * @param float $quantity Order quantity
+ * @return array|null Price data or null if no contract
+ */
+function wp_get_contract_price($ncr_bid_no, $item_no, $quantity = 1.0) {
+    // Call Python script via REST API or direct database connection
+    // For now, we'll use a REST API endpoint (to be created)
+    
+    $api_url = get_option('wp_contract_pricing_api_url', 'http://localhost:5000/api/contract-price');
+    
+    $response = wp_remote_post($api_url, array(
+        'body' => json_encode(array(
+            'ncr_bid_no' => $ncr_bid_no,
+            'item_no' => $item_no,
+            'quantity' => $quantity
+        )),
+        'headers' => array(
+            'Content-Type' => 'application/json'
+        ),
+        'timeout' => 5
+    ));
+    
+    if (is_wp_error($response)) {
+        error_log('Contract pricing API error: ' . $response->get_error_message());
+        return null;
+    }
+    
+    $body = wp_remote_retrieve_body($response);
+    $data = json_decode($body, true);
+    
+    if ($data && isset($data['contract_price'])) {
+        return $data;
+    }
+    
+    return null;
+}
+
+/**
+ * Get customer's NCR BID # from user meta
+ * 
+ * @param int $user_id WordPress user ID
+ * @return string|null NCR BID # or null if not found
+ */
+function wp_get_customer_ncr_bid($user_id) {
+    $ncr_bid = get_user_meta($user_id, 'cp_ncr_bid_no', true);
+    return $ncr_bid ? trim($ncr_bid) : null;
+}
+
+/**
+ * Apply contract pricing to product price
+ * 
+ * Hook: woocommerce_product_get_price
+ * Priority: 20 (after tier pricing, before regular price)
+ */
+function wp_apply_contract_pricing($price, $product) {
+    // Only apply to logged-in customers
+    if (!is_user_logged_in()) {
+        return $price;
+    }
+    
+    $user_id = get_current_user_id();
+    $ncr_bid = wp_get_customer_ncr_bid($user_id);
+    
+    // No NCR BID # = no contract pricing
+    if (!$ncr_bid) {
+        return $price;
+    }
+    
+    $sku = $product->get_sku();
+    if (!$sku) {
+        return $price;
+    }
+    
+    // Get quantity from cart if product is in cart
+    $quantity = 1.0;
+    if (WC()->cart) {
+        foreach (WC()->cart->get_cart() as $cart_item) {
+            if ($cart_item['product_id'] == $product->get_id()) {
+                $quantity = $cart_item['quantity'];
+                break;
+            }
+        }
+    }
+    
+    // Get contract price
+    $contract_data = wp_get_contract_price($ncr_bid, $sku, $quantity);
+    
+    if ($contract_data && isset($contract_data['contract_price'])) {
+        // Contract pricing takes priority
+        return floatval($contract_data['contract_price']);
+    }
+    
+    // Fall back to original price (tier pricing handled by other plugin)
+    return $price;
+}
+add_filter('woocommerce_product_get_price', 'wp_apply_contract_pricing', 20, 2);
+add_filter('woocommerce_product_get_regular_price', 'wp_apply_contract_pricing', 20, 2);
+add_filter('woocommerce_product_get_sale_price', 'wp_apply_contract_pricing', 20, 2);
+
+/**
+ * Apply contract pricing to cart item price
+ * 
+ * Hook: woocommerce_cart_item_price
+ * This handles quantity breaks when quantity changes in cart
+ */
+function wp_apply_contract_pricing_cart($price, $cart_item, $cart_item_key) {
+    if (!is_user_logged_in()) {
+        return $price;
+    }
+    
+    $user_id = get_current_user_id();
+    $ncr_bid = wp_get_customer_ncr_bid($user_id);
+    
+    if (!$ncr_bid) {
+        return $price;
+    }
+    
+    $product = $cart_item['data'];
+    $sku = $product->get_sku();
+    $quantity = $cart_item['quantity'];
+    
+    if (!$sku) {
+        return $price;
+    }
+    
+    // Get contract price with actual cart quantity
+    $contract_data = wp_get_contract_price($ncr_bid, $sku, $quantity);
+    
+    if ($contract_data && isset($contract_data['contract_price'])) {
+        // Update product price in cart
+        $product->set_price($contract_data['contract_price']);
+        return wc_price($contract_data['contract_price']);
+    }
+    
+    return $price;
+}
+add_filter('woocommerce_cart_item_price', 'wp_apply_contract_pricing_cart', 20, 3);
+
+/**
+ * Recalculate cart totals when quantity changes
+ * 
+ * Hook: woocommerce_after_cart_item_quantity_update
+ */
+function wp_recalculate_contract_pricing_on_quantity_change($cart_item_key, $quantity, $old_quantity) {
+    if (!is_user_logged_in()) {
+        return;
+    }
+    
+    $user_id = get_current_user_id();
+    $ncr_bid = wp_get_customer_ncr_bid($user_id);
+    
+    if (!$ncr_bid) {
+        return;
+    }
+    
+    $cart = WC()->cart;
+    $cart_item = $cart->get_cart_item($cart_item_key);
+    
+    if (!$cart_item) {
+        return;
+    }
+    
+    $product = $cart_item['data'];
+    $sku = $product->get_sku();
+    
+    if (!$sku) {
+        return;
+    }
+    
+    // Get contract price with new quantity
+    $contract_data = wp_get_contract_price($ncr_bid, $sku, $quantity);
+    
+    if ($contract_data && isset($contract_data['contract_price'])) {
+        // Update product price
+        $product->set_price($contract_data['contract_price']);
+    }
+}
+add_action('woocommerce_after_cart_item_quantity_update', 'wp_recalculate_contract_pricing_on_quantity_change', 10, 3);
+
+/**
+ * Display contract price information on product page
+ * 
+ * Hook: woocommerce_single_product_summary
+ */
+function wp_display_contract_pricing_info() {
+    if (!is_user_logged_in()) {
+        return;
+    }
+    
+    global $product;
+    $user_id = get_current_user_id();
+    $ncr_bid = wp_get_customer_ncr_bid($user_id);
+    
+    if (!$ncr_bid) {
+        return;
+    }
+    
+    $sku = $product->get_sku();
+    if (!$sku) {
+        return;
+    }
+    
+    // Get contract price for quantity 1
+    $contract_data = wp_get_contract_price($ncr_bid, $sku, 1.0);
+    
+    if ($contract_data && isset($contract_data['contract_price'])) {
+        $regular_price = $contract_data['regular_price'];
+        $contract_price = $contract_data['contract_price'];
+        $discount_pct = $contract_data['discount_pct'];
+        
+        echo '<div class="contract-pricing-info" style="margin-top: 10px; padding: 10px; background: #f0f0f0; border-radius: 4px;">';
+        echo '<strong>Contract Pricing Applied</strong><br>';
+        echo '<span style="text-decoration: line-through;">Regular: ' . wc_price($regular_price) . '</span> ';
+        echo '<span style="color: green; font-weight: bold;">Your Price: ' . wc_price($contract_price) . '</span>';
+        if ($discount_pct) {
+            echo '<br><small>Discount: ' . number_format($discount_pct, 2) . '%</small>';
+        }
+        echo '</div>';
+    }
+}
+add_action('woocommerce_single_product_summary', 'wp_display_contract_pricing_info', 25);
+
+/**
+ * Admin settings page for contract pricing
+ */
+function wp_contract_pricing_settings_page() {
+    add_options_page(
+        'Contract Pricing Settings',
+        'Contract Pricing',
+        'manage_options',
+        'wp-contract-pricing',
+        'wp_contract_pricing_settings_html'
+    );
+}
+add_action('admin_menu', 'wp_contract_pricing_settings_page');
+
+function wp_contract_pricing_settings_html() {
+    if (!current_user_can('manage_options')) {
+        return;
+    }
+    
+    if (isset($_POST['submit'])) {
+        update_option('wp_contract_pricing_api_url', sanitize_text_field($_POST['api_url']));
+        echo '<div class="notice notice-success"><p>Settings saved!</p></div>';
+    }
+    
+    $api_url = get_option('wp_contract_pricing_api_url', 'http://localhost:5000/api/contract-price');
+    ?>
+    <div class="wrap">
+        <h1>Contract Pricing Settings</h1>
+        <form method="post">
+            <table class="form-table">
+                <tr>
+                    <th scope="row">
+                        <label for="api_url">Contract Pricing API URL</label>
+                    </th>
+                    <td>
+                        <input type="url" id="api_url" name="api_url" value="<?php echo esc_attr($api_url); ?>" class="regular-text" />
+                        <p class="description">URL to the contract pricing API endpoint</p>
+                    </td>
+                </tr>
+            </table>
+            <?php submit_button(); ?>
+        </form>
+    </div>
+    <?php
+}
+

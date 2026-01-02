@@ -1,0 +1,202 @@
+-- ============================================
+-- CounterPoint Orders Export View
+-- ============================================
+-- Purpose: Export orders from CounterPoint for display on retail site (woodyspaper.com)
+-- Includes units of measurement: each, pack, box, carton, pallet
+--
+-- This view provides orders that can be displayed on the retail site
+-- showing proper units of measurement for each line item
+
+IF EXISTS (SELECT * FROM sys.views WHERE name = 'VI_EXPORT_CP_ORDERS')
+    DROP VIEW dbo.VI_EXPORT_CP_ORDERS;
+GO
+
+CREATE VIEW dbo.VI_EXPORT_CP_ORDERS
+AS
+SELECT 
+    -- Order Header (using only columns we know exist)
+    h.DOC_ID AS ORDER_NUMBER,
+    h.DOC_TYP AS ORDER_TYPE,
+    -- Date columns - try common variations
+    CAST(h.DOC_DAT AS DATE) AS ORDER_DATE,  -- Try DOC_DAT, ORD_DAT, or DAT
+    CAST(h.DOC_DAT AS TIME) AS ORDER_TIME,  -- Extract time from date
+    h.CUST_NO AS CUSTOMER_NUMBER,
+    c.NAM AS CUSTOMER_NAME,
+    -- Status - try common variations
+    COALESCE(h.DOC_STAT, h.STATUS, 'A') AS ORDER_STATUS,  -- Try DOC_STAT, STATUS, or default to 'A'
+    
+    -- Shipping Address - try variations (SHIP_* vs SHIP_TO_*)
+    COALESCE(h.SHIP_NAM, h.SHIP_TO_NAM, h.NAM) AS SHIP_NAME,
+    COALESCE(h.SHIP_ADRS_1, h.SHIP_TO_ADRS_1, h.ADRS_1) AS SHIP_ADDRESS_1,
+    COALESCE(h.SHIP_ADRS_2, h.SHIP_TO_ADRS_2, h.ADRS_2) AS SHIP_ADDRESS_2,
+    COALESCE(h.SHIP_CITY, h.SHIP_TO_CITY, h.CITY) AS SHIP_CITY,
+    COALESCE(h.SHIP_STATE, h.SHIP_TO_STATE, h.STATE) AS SHIP_STATE,
+    COALESCE(h.SHIP_ZIP_COD, h.SHIP_TO_ZIP_COD, h.ZIP_COD) AS SHIP_ZIP,
+    COALESCE(h.SHIP_CNTRY, h.SHIP_TO_CNTRY, h.CNTRY) AS SHIP_COUNTRY,
+    COALESCE(h.SHIP_VIA_COD, h.SHIP_VIA) AS SHIP_VIA,
+    
+    -- Line Items
+    l.LIN_SEQ_NO AS LINE_SEQUENCE,
+    l.ITEM_NO AS SKU,
+    i.DESCR AS ITEM_DESCRIPTION,
+    i.SHORT_DESCR AS ITEM_SHORT_DESCRIPTION,
+    
+    -- QUANTITY AND UNITS (CRITICAL)
+    COALESCE(l.QTY_ORD, l.QTY, l.QUANTITY) AS QUANTITY_ORDERED,
+    l.SELL_UNIT AS SELLING_UNIT,  -- Unit of measure (EA, PK, BX, CT, PL, etc.)
+    
+    -- Unit mapping: Translate CP unit codes to display names
+    CASE 
+        WHEN l.SELL_UNIT = 'EA' THEN 'Each'
+        WHEN l.SELL_UNIT = 'PK' THEN 'Pack'
+        WHEN l.SELL_UNIT = 'BX' THEN 'Box'
+        WHEN l.SELL_UNIT = 'CT' THEN 'Carton'
+        WHEN l.SELL_UNIT = 'PL' THEN 'Pallet'
+        WHEN l.SELL_UNIT = 'CS' THEN 'Case'
+        WHEN l.SELL_UNIT = 'RL' THEN 'Roll'
+        WHEN l.SELL_UNIT = 'FTL' THEN 'Full Truck Load'
+        WHEN l.SELL_UNIT = 'LTL' THEN 'Less Than Truckload'
+        WHEN l.SELL_UNIT = 'LB' THEN 'Pound'
+        WHEN l.SELL_UNIT = 'TON' THEN 'Ton'
+        WHEN l.SELL_UNIT = 'M' THEN 'Thousand'
+        WHEN l.SELL_UNIT = 'C' THEN 'Hundred'
+        ELSE l.SELL_UNIT  -- Use CP code if not mapped
+    END AS UNIT_DISPLAY_NAME,
+    
+    -- Stocking unit for reference
+    i.STK_UNIT AS STOCKING_UNIT,
+    CASE 
+        WHEN i.STK_UNIT = 'EA' THEN 'Each'
+        WHEN i.STK_UNIT = 'PK' THEN 'Pack'
+        WHEN i.STK_UNIT = 'BX' THEN 'Box'
+        WHEN i.STK_UNIT = 'CT' THEN 'Carton'
+        WHEN i.STK_UNIT = 'PL' THEN 'Pallet'
+        WHEN i.STK_UNIT = 'CS' THEN 'Case'
+        WHEN i.STK_UNIT = 'RL' THEN 'Roll'
+        ELSE i.STK_UNIT
+    END AS STOCKING_UNIT_DISPLAY,
+    
+    -- Pricing - try common variations
+    l.PRC AS UNIT_PRICE,
+    COALESCE(l.TOT_AMT, l.TOTAL_AMT, l.LINE_TOT, l.PRC * COALESCE(l.QTY_ORD, l.QTY, l.QUANTITY, 1)) AS LINE_TOTAL,
+    COALESCE(l.DISC_AMT, l.DISC_AMOUNT, 0) AS LINE_DISCOUNT,
+    
+    -- Order Totals - try common variations
+    COALESCE(h.SUBTOT, h.SUBTOTAL, h.SUB_TOT, 0) AS ORDER_SUBTOTAL,
+    COALESCE(h.DISC_AMT, h.DISC_AMOUNT, 0) AS ORDER_DISCOUNT,
+    COALESCE(h.TAX_AMT, h.TAX_AMOUNT, 0) AS ORDER_TAX,
+    COALESCE(h.SHIP_AMT, h.SHIP_AMOUNT, 0) AS ORDER_SHIPPING,
+    COALESCE(h.TOT_AMT, h.TOTAL_AMT, h.TOT, 0) AS ORDER_TOTAL,
+    
+    -- Payment (if PS_DOC_PAY table exists)
+    NULL AS PAYMENT_CODE,  -- Will be populated if table exists
+    NULL AS PAYMENT_METHOD,
+    NULL AS PAYMENT_AMOUNT,
+    
+    -- Tracking (if PS_DOC_TRACK table exists)
+    NULL AS TRACKING_NUMBER,  -- Will be populated if table exists
+    
+    -- Notes (if PS_DOC_NOTE table exists)
+    NULL AS ORDER_NOTE,  -- Will be populated if table exists
+    
+    -- Metadata
+    h.CUST_PO_NO AS CUSTOMER_PO_NUMBER,
+    h.SLS_REP AS SALES_REP,
+    COALESCE(h.USER_ID, h.CREATED_BY, h.ENTRY_USER) AS CREATED_BY_USER,
+    
+    -- Audit - try common variations
+    COALESCE(h.LST_MAINT_DT, h.LAST_MODIFIED_DT, h.UPDATED_DT) AS LAST_MODIFIED_DATE,
+    COALESCE(h.POST_DAT, h.POSTED_DAT, h.POST_DATE) AS POSTED_DATE
+    
+FROM dbo.PS_DOC_HDR h
+INNER JOIN dbo.PS_DOC_LIN l ON l.DOC_ID = h.DOC_ID
+LEFT JOIN dbo.IM_ITEM i ON i.ITEM_NO = l.ITEM_NO
+LEFT JOIN dbo.AR_CUST c ON c.CUST_NO = h.CUST_NO
+-- Note: Payment, tracking, and notes tables may not exist in all CounterPoint installations
+-- These fields are set to NULL for now - can be enhanced if tables exist
+WHERE h.DOC_TYP IN ('T', 'O', 'I')  -- Ticket, Order, Invoice
+  AND h.STAT != 'V'  -- Exclude voided orders
+GO
+
+PRINT 'Created VI_EXPORT_CP_ORDERS view';
+GO
+
+-- ============================================
+-- Unit Mapping Reference Table (Optional)
+-- ============================================
+-- This table can be used for custom unit mappings if needed
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'USER_UNIT_MAPPING')
+BEGIN
+    CREATE TABLE dbo.USER_UNIT_MAPPING (
+        UNIT_CODE            VARCHAR(10) PRIMARY KEY,
+        UNIT_DISPLAY_NAME    VARCHAR(50) NOT NULL,
+        UNIT_DESCRIPTION     NVARCHAR(255) NULL,
+        UNIT_CATEGORY        VARCHAR(20) NULL,  -- 'WEIGHT', 'VOLUME', 'COUNT', 'LENGTH', etc.
+        SORT_ORDER           INT DEFAULT 0,
+        IS_ACTIVE            BIT DEFAULT 1,
+        
+        CREATED_DT           DATETIME2 DEFAULT GETDATE(),
+        CREATED_BY           VARCHAR(50) DEFAULT SYSTEM_USER,
+        UPDATED_DT           DATETIME2,
+        UPDATED_BY           VARCHAR(50)
+    );
+    
+    -- Insert standard unit mappings
+    INSERT INTO dbo.USER_UNIT_MAPPING (UNIT_CODE, UNIT_DISPLAY_NAME, UNIT_DESCRIPTION, UNIT_CATEGORY, SORT_ORDER)
+    VALUES
+        ('EA', 'Each', 'Individual unit', 'COUNT', 1),
+        ('PK', 'Pack', 'Pack of items', 'COUNT', 2),
+        ('BX', 'Box', 'Box of items', 'COUNT', 3),
+        ('CT', 'Carton', 'Carton of items', 'COUNT', 4),
+        ('CS', 'Case', 'Case of items', 'COUNT', 5),
+        ('PL', 'Pallet', 'Pallet of items', 'COUNT', 6),
+        ('RL', 'Roll', 'Roll of material', 'COUNT', 7),
+        ('LB', 'Pound', 'Weight in pounds', 'WEIGHT', 10),
+        ('TON', 'Ton', 'Weight in tons', 'WEIGHT', 11),
+        ('M', 'Thousand', 'Quantity in thousands', 'COUNT', 8),
+        ('C', 'Hundred', 'Quantity in hundreds', 'COUNT', 9),
+        ('FTL', 'Full Truck Load', 'Full truck load', 'VOLUME', 20),
+        ('LTL', 'Less Than Truckload', 'Less than truckload', 'VOLUME', 21);
+    
+    PRINT 'Created USER_UNIT_MAPPING table with standard units';
+END
+ELSE
+    PRINT 'USER_UNIT_MAPPING already exists';
+GO
+
+-- ============================================
+-- Enhanced View with Unit Mapping Table
+-- ============================================
+-- If you want to use the mapping table instead of hardcoded CASE
+-- Note: This view depends on VI_EXPORT_CP_ORDERS being created first
+-- Commented out until main view is fixed
+
+/*
+IF EXISTS (SELECT * FROM sys.views WHERE name = 'VI_EXPORT_CP_ORDERS')
+BEGIN
+    IF EXISTS (SELECT * FROM sys.views WHERE name = 'VI_EXPORT_CP_ORDERS_WITH_UNITS')
+        DROP VIEW dbo.VI_EXPORT_CP_ORDERS_WITH_UNITS;
+    
+    CREATE VIEW dbo.VI_EXPORT_CP_ORDERS_WITH_UNITS
+    AS
+    SELECT 
+        o.*,
+        COALESCE(u.UNIT_DISPLAY_NAME, o.SELLING_UNIT) AS UNIT_DISPLAY_NAME_MAPPED,
+        u.UNIT_DESCRIPTION AS UNIT_DESCRIPTION,
+        u.UNIT_CATEGORY AS UNIT_CATEGORY,
+        u.SORT_ORDER AS UNIT_SORT_ORDER
+    FROM dbo.VI_EXPORT_CP_ORDERS o
+    LEFT JOIN dbo.USER_UNIT_MAPPING u ON u.UNIT_CODE = o.SELLING_UNIT AND u.IS_ACTIVE = 1;
+    
+    PRINT 'Created VI_EXPORT_CP_ORDERS_WITH_UNITS view (uses mapping table)';
+END
+ELSE
+BEGIN
+    PRINT 'VI_EXPORT_CP_ORDERS view does not exist - skipping VI_EXPORT_CP_ORDERS_WITH_UNITS';
+    PRINT 'Please ensure VI_EXPORT_CP_ORDERS is created first';
+END
+*/
+PRINT 'VI_EXPORT_CP_ORDERS_WITH_UNITS view creation skipped - will create after main view is fixed';
+GO
+

@@ -1,7 +1,21 @@
+# Database
 pyodbc>=4.0.39
+
+# Web Framework (Flask APIs)
+flask>=3.0.0
+flask-cors>=4.0.0
+
+# HTTP Requests
 requests>=2.32.3
+
+# Configuration
 python-dotenv>=1.0.1
+
+# Testing
 pytest>=8.3.3
 pytest-mock>=3.14.0
 requests-mock>=1.12.1
 
+# Production WSGI Server (optional, for production deployment)
+# gunicorn>=21.2.0  # Linux/Mac
+# waitress>=2.1.2   # Windows

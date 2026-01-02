@@ -1,9 +1,53 @@
-.env
+# Python
 __pycache__/
-.pytest_cache/
-*.log
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
 *.pyc
-# Ignore env templates and local env variants
-.env.example
-.env.*
 
+# Environment
+.env
+.env.local
+.venv
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Data files (if sensitive)
+data/exports/*.csv
+*.csv
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary
+*.tmp
+*.bak
+*.backup
+
+# WordPress plugin zip (regenerated)
+woocommerce-contract-pricing-plugin.zip
+
+# Test outputs
+*.test
+test_output/
+
+# Database backups
+*.sql.bak
+*.db

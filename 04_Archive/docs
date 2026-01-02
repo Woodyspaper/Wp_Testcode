@@ -1,0 +1,226 @@
+# Cleanup Action Plan
+
+**Date:** December 30, 2025  
+**Based on:** `docs/COMPREHENSIVE_FOLDER_AUDIT.md`
+
+---
+
+## 🎯 **QUICK SUMMARY**
+
+- **13 files to archive** (obsolete production files)
+- **36 files to organize** (screenshots, CSVs)
+- **0 essential files to delete** ✅
+
+---
+
+## ✅ **PRIORITY 1: Archive Obsolete Production Files**
+
+### **Move to `04_Archive/01_Production/`:**
+
+```bash
+# Create archive subfolder
+mkdir -p 04_Archive/01_Production
+
+# Move obsolete SQL view scripts
+mv 01_Production/counterpoint_orders_export_view.sql 04_Archive/01_Production/
+mv 01_Production/counterpoint_orders_export_view_safe.sql 04_Archive/01_Production/
+mv 01_Production/counterpoint_orders_export_view_enhanced.sql 04_Archive/01_Production/
+mv 01_Production/recreate_cp_orders_view.sql 04_Archive/01_Production/
+```
+
+### **Move to `03_Reference/`:**
+
+```bash
+# Create reference subfolders
+mkdir -p 03_Reference/api
+mkdir -p 03_Reference/wordpress
+
+# Move basic versions (for reference/comparison)
+mv api/contract_pricing_api.py 03_Reference/api/
+mv api/cp_orders_api.py 03_Reference/api/
+mv wordpress/woocommerce-contract-pricing.php 03_Reference/wordpress/
+```
+
+**Result:** Production folders now only contain current/essential files.
+
+---
+
+## ✅ **PRIORITY 2: Organize Screenshots**
+
+### **Create Screenshots Folder:**
+
+```bash
+# Create screenshots folder in docs
+mkdir -p docs/screenshots
+
+# Move all PNG files
+mv *.PNG docs/screenshots/
+
+# Fix typo
+mv docs/screenshots/Vadlidate.PNG docs/screenshots/Validate4.PNG
+```
+
+**Result:** Root directory cleaner, screenshots organized.
+
+---
+
+## ✅ **PRIORITY 3: Organize Data Files**
+
+### **Create Data Folder:**
+
+```bash
+# Create data folder
+mkdir -p data/exports
+
+# Move CSV files
+mv *.csv data/exports/
+```
+
+**Result:** Root directory cleaner, data files organized.
+
+---
+
+## ✅ **PRIORITY 4: Archive Historical SQL**
+
+### **Create Archive Subfolder:**
+
+```bash
+# Create archive subfolder for docs
+mkdir -p 04_Archive/docs
+
+# Move historical SQL discovery scripts
+mv docs/ANALYZE_UNKNOWN_PRODUCTS.sql 04_Archive/docs/
+mv docs/INVESTIGATE_CB_PRODUCTS.sql 04_Archive/docs/
+mv docs/CHECK_IM_UNIT_COD.sql 04_Archive/docs/
+mv docs/DIAGNOSE_UNIT_MAPPING.sql 04_Archive/docs/
+mv docs/VERIFY_VIEW_DEFINITION.sql 04_Archive/docs/
+mv docs/NCR_TYPE_EXTRACTION_LOGIC.sql 04_Archive/docs/
+```
+
+**Result:** `docs/` folder contains only current/useful files.
+
+---
+
+## ✅ **PRIORITY 5: Create .gitignore**
+
+### **Create `.gitignore` File:**
+
+```gitignore
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Environment
+.env
+.env.local
+.venv
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Data files (if sensitive)
+data/exports/*.csv
+*.csv
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary
+*.tmp
+*.bak
+*.backup
+```
+
+**Result:** Git repository cleaner, sensitive files excluded.
+
+---
+
+## ✅ **PRIORITY 6: Organize Historical Documentation**
+
+### **Create Historical Subfolder:**
+
+```bash
+# Create historical docs folder
+mkdir -p docs/historical
+
+# Move historical analysis docs (optional - keep if useful)
+# Uncomment if you want to archive these:
+# mv docs/VALIDATION_ANALYSIS.md docs/historical/
+# mv docs/ENHANCED_EXTRACTION_RESULTS.md docs/historical/
+# mv docs/EXTRACTION_ENHANCEMENT_SUMMARY.md docs/historical/
+# mv docs/CB_PATTERN_FIX_ANALYSIS.md docs/historical/
+# mv docs/CB_FIX_VALIDATION_RESULTS.md docs/historical/
+```
+
+**Note:** These docs are still useful for reference, so archiving is optional.
+
+---
+
+## 📋 **EXECUTION CHECKLIST**
+
+- [ ] **Priority 1:** Archive obsolete production files
+- [ ] **Priority 2:** Organize screenshots
+- [ ] **Priority 3:** Organize data files
+- [ ] **Priority 4:** Archive historical SQL
+- [ ] **Priority 5:** Create `.gitignore`
+- [ ] **Priority 6:** (Optional) Organize historical docs
+
+---
+
+## 🎯 **EXPECTED RESULTS**
+
+### **Before Cleanup:**
+```
+WP_Testcode/
+├── 01_Production/ (15 files - 4 obsolete)
+├── api/ (4 files - 2 basic versions)
+├── wordpress/ (3 files - 1 basic version)
+├── docs/ (60+ files - mixed current/historical)
+├── *.PNG (30+ files in root)
+└── *.csv (6 files in root)
+```
+
+### **After Cleanup:**
+```
+WP_Testcode/
+├── 01_Production/ (11 files - all current)
+├── api/ (2 files - enhanced only)
+├── wordpress/ (2 files - enhanced only)
+├── 03_Reference/ (basic versions for reference)
+├── 04_Archive/ (obsolete files archived)
+├── docs/ (organized, current files)
+│   └── screenshots/ (all PNG files)
+├── data/exports/ (all CSV files)
+└── .gitignore (excludes cache, logs, etc.)
+```
+
+---
+
+## ⚠️ **IMPORTANT NOTES**
+
+1. **No Essential Files Deleted:** All cleanup is archiving/organizing, not deleting
+2. **Test After Moving:** Verify all imports still work after moving files
+3. **Update Documentation:** Update `docs/README.md` with new structure
+4. **Git:** If using Git, commit before cleanup, then commit cleanup separately
+
+---
+
+**Last Updated:** December 30, 2025

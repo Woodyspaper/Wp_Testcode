@@ -30,6 +30,11 @@ class WooClient:
             self.config.woo.consumer_key,
             self.config.woo.consumer_secret,
         )
+        # Browser-like headers to avoid server blocking (GoDaddy/security plugins)
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json',
+        })
 
     def _url(self, path: str) -> str:
         return f"{self.config.woo.base_url}/wp-json/wc/v3{path}"
@@ -294,6 +299,68 @@ class WooClient:
 
         logger.info("Inventory sync complete: %d updated, %d errors", updated, len(errors))
         return updated, errors
+
+    def update_order_status(
+        self, order_id: int, status: str, note: Optional[str] = None, dry_run: Optional[bool] = None
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Update WooCommerce order status and optionally add a note.
+        
+        Args:
+            order_id: WooCommerce order ID
+            status: New order status (e.g., 'processing', 'completed', 'on-hold')
+            note: Optional note to add to the order
+            dry_run: When True, only log what would be sent. If None, checks DRY_RUN env var.
+        
+        Returns:
+            Tuple of (success, error_message)
+        """
+        if dry_run is None:
+            dry_run = os.getenv("DRY_RUN", "false").lower() in {"true", "1", "yes"}
+
+        url = self._url(f"/orders/{order_id}")
+        
+        # Build update payload
+        payload = {"status": status}
+        
+        if dry_run:
+            logger.info("DRY-RUN: Would update order %d status to '%s'", order_id, status)
+            if note:
+                logger.info("DRY-RUN: Would add note: %s", note[:100])
+            return True, None
+        
+        try:
+            # Update order status
+            response = self.session.put(url, json=payload, timeout=30)
+            
+            if not response.ok:
+                error_msg = f"Failed to update order status: {response.status_code} {response.reason}"
+                logger.error(error_msg)
+                return False, error_msg
+            
+            logger.info("✓ Updated order %d status to '%s'", order_id, status)
+            
+            # Add note if provided
+            if note:
+                note_url = self._url(f"/orders/{order_id}/notes")
+                note_payload = {
+                    "note": note,
+                    "customer_note": False  # Internal note, not visible to customer
+                }
+                note_response = self.session.post(note_url, json=note_payload, timeout=30)
+                
+                if note_response.ok:
+                    logger.info("✓ Added note to order %d", order_id)
+                else:
+                    logger.warning("Failed to add note to order %d: %s", order_id, note_response.status_code)
+                    # Note failure doesn't fail the whole operation
+            
+            return True, None
+            
+        except Exception as exc:
+            error_msg = f"Exception updating order {order_id}: {exc}"
+            logger.exception(error_msg)
+            return False, error_msg
 
 
 def main() -> None:

@@ -1,0 +1,110 @@
+-- ============================================
+-- Diagnose Truncation Error
+-- Check which field is causing the truncation
+-- ============================================
+
+USE WOODYS_CP;  -- Change to CPPractice if testing
+GO
+
+PRINT '============================================';
+PRINT 'DIAGNOSING TRUNCATION ERROR';
+PRINT '============================================';
+PRINT '';
+
+-- Check the test record and see field lengths
+SELECT 
+    STAGING_ID,
+    BATCH_ID,
+    'NAM' AS FIELD_NAME,
+    LEN(NAM) AS FIELD_LENGTH,
+    40 AS MAX_LENGTH,
+    NAM AS FIELD_VALUE
+FROM dbo.USER_CUSTOMER_STAGING
+WHERE BATCH_ID = 'TEST_BATCH_001'
+  AND LEN(NAM) > 40
+
+UNION ALL
+
+SELECT 
+    STAGING_ID,
+    BATCH_ID,
+    'ADRS_1' AS FIELD_NAME,
+    LEN(ADRS_1) AS FIELD_LENGTH,
+    40 AS MAX_LENGTH,
+    ADRS_1 AS FIELD_VALUE
+FROM dbo.USER_CUSTOMER_STAGING
+WHERE BATCH_ID = 'TEST_BATCH_001'
+  AND LEN(ADRS_1) > 40
+
+UNION ALL
+
+SELECT 
+    STAGING_ID,
+    BATCH_ID,
+    'CITY' AS FIELD_NAME,
+    LEN(CITY) AS FIELD_LENGTH,
+    20 AS MAX_LENGTH,
+    CITY AS FIELD_VALUE
+FROM dbo.USER_CUSTOMER_STAGING
+WHERE BATCH_ID = 'TEST_BATCH_001'
+  AND LEN(CITY) > 20
+
+UNION ALL
+
+SELECT 
+    STAGING_ID,
+    BATCH_ID,
+    'STATE' AS FIELD_NAME,
+    LEN(STATE) AS FIELD_LENGTH,
+    10 AS MAX_LENGTH,
+    STATE AS FIELD_VALUE
+FROM dbo.USER_CUSTOMER_STAGING
+WHERE BATCH_ID = 'TEST_BATCH_001'
+  AND LEN(STATE) > 10
+
+UNION ALL
+
+SELECT 
+    STAGING_ID,
+    BATCH_ID,
+    'ZIP_COD' AS FIELD_NAME,
+    LEN(ZIP_COD) AS FIELD_LENGTH,
+    15 AS MAX_LENGTH,
+    ZIP_COD AS FIELD_VALUE
+FROM dbo.USER_CUSTOMER_STAGING
+WHERE BATCH_ID = 'TEST_BATCH_001'
+  AND LEN(ZIP_COD) > 15
+
+UNION ALL
+
+SELECT 
+    STAGING_ID,
+    BATCH_ID,
+    'EMAIL_ADRS_1' AS FIELD_NAME,
+    LEN(EMAIL_ADRS_1) AS FIELD_LENGTH,
+    50 AS MAX_LENGTH,
+    EMAIL_ADRS_1 AS FIELD_VALUE
+FROM dbo.USER_CUSTOMER_STAGING
+WHERE BATCH_ID = 'TEST_BATCH_001'
+  AND LEN(EMAIL_ADRS_1) > 50
+
+UNION ALL
+
+SELECT 
+    STAGING_ID,
+    BATCH_ID,
+    'PROF_COD_1' AS FIELD_NAME,
+    LEN(PROF_COD_1) AS FIELD_LENGTH,
+    10 AS MAX_LENGTH,
+    PROF_COD_1 AS FIELD_VALUE
+FROM dbo.USER_CUSTOMER_STAGING
+WHERE BATCH_ID = 'TEST_BATCH_001'
+  AND LEN(PROF_COD_1) > 10;
+GO
+
+PRINT '';
+PRINT 'If any fields show above, they exceed the maximum length!';
+PRINT 'Fix by truncating those fields in the staging table.';
+PRINT '============================================';
+GO
+

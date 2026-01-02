@@ -1,0 +1,15 @@
+USE WOODYS_CP;
+GO
+
+-- Check what the current view definition actually is
+IF OBJECT_ID('dbo.VI_EXPORT_PRODUCTS', 'V') IS NOT NULL
+BEGIN
+    SELECT 
+        OBJECT_DEFINITION(OBJECT_ID('dbo.VI_EXPORT_PRODUCTS')) AS VIEW_DEFINITION;
+END
+ELSE
+BEGIN
+    SELECT 'VI_EXPORT_PRODUCTS view does not exist' AS STATUS;
+END
+GO
+
