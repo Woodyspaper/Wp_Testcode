@@ -82,11 +82,22 @@ The folder `C:\Program Files (x86)\NCR\Counterpoint API` contains:
 - **`NCRCounterpointAPI.exe`** - NCR's official API executable
 - **`CPAPI.exe`** - CounterPoint API service
 - **Various DLLs** - NCR API libraries
-- **`APIKeys` folder** - Where NCR API keys would be stored
+- **`APIKeys` folder** - Contains the API key files
 - **`App_Data` folder** - API configuration data
 - **`Logfiles` folder** - API logs
 
-**These are NOT used by the current system.**
+### **Found API Key:**
+
+**Location:** `C:\Program Files (x86)\NCR\Counterpoint API\APIKeys\WooCommerce_Integration.xml`
+
+**API Key:** `VBaTcpMdJdC4LNnYFBuKw8noYavRsTIPS3Sc1uSk`
+
+**Details:**
+- Name: "WooCommerce Integration"
+- Developer: "WoodysPaper"
+- Created: December 15, 2025
+
+**However, this API key is NOT used by the current system** - the system uses direct SQL connections instead.
 
 ---
 
