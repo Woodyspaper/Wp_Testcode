@@ -279,6 +279,12 @@ def delete_spam_customers(spam_customers: List[Dict], apply: bool = False) -> tu
             print(f"  Deleting customer {i}/{len(spam_customers)}...")
         
         try:
+            # Skip negative IDs (guest checkout pseudo-customers, not real users)
+            if customer_id < 0:
+                print(f"  SKIP: Customer {customer_id} ({email}) is guest checkout pseudo-user (not a real account)")
+                errors += 1
+                continue
+            
             # Delete customer via WooCommerce API
             url = client._url(f"/customers/{customer_id}")
             resp = client.session.delete(url, params={"force": True}, timeout=30)
@@ -286,10 +292,19 @@ def delete_spam_customers(spam_customers: List[Dict], apply: bool = False) -> tu
                 deleted += 1
             else:
                 errors += 1
-                print(f"  ERROR deleting customer {customer_id} ({email}): {resp.status_code} {resp.text[:100]}")
+                error_msg = resp.text[:100] if resp.text else "Unknown error"
+                # Check if it's a role permission error
+                if resp.status_code == 403 and "role" in error_msg.lower():
+                    print(f"  ERROR (Role Permission): Customer {customer_id} ({email}) - Cannot delete via API (has tier role). Delete via WordPress Admin.")
+                else:
+                    print(f"  ERROR deleting customer {customer_id} ({email}): {resp.status_code} {error_msg}")
         except Exception as e:
-            print(f"  ERROR deleting customer {customer_id} ({email}): {e}")
             errors += 1
+            error_str = str(e)
+            if "timeout" in error_str.lower():
+                print(f"  ERROR (Timeout): Customer {customer_id} ({email}) - Network timeout. Retry or delete via WordPress Admin.")
+            else:
+                print(f"  ERROR deleting customer {customer_id} ({email}): {e}")
     
     print(f"\n{'='*60}")
     print(f"DELETION COMPLETE")
