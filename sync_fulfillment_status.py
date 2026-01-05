@@ -1,0 +1,135 @@
+"""Sync fulfillment status from CounterPoint to WooCommerce
+
+Monitors PS_DOC_HDR.SHIP_DAT to detect when orders are shipped,
+then updates WooCommerce order status to 'completed'.
+"""
+from database import run_query, get_connection
+from woo_client import WooClient
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+def find_fulfilled_orders():
+    """
+    Find orders in CounterPoint that are shipped but WooCommerce still shows 'processing'.
+    
+    Returns list of orders ready to mark as completed:
+    - Order has SHIP_DAT set (not NULL) = shipped
+    - WooCommerce order status is still 'processing' (not yet completed)
+    """
+    sql = """
+        SELECT 
+            s.WOO_ORDER_ID,
+            s.CP_DOC_ID,
+            h.TKT_NO,
+            h.SHIP_DAT,
+            h.TKT_DT
+        FROM dbo.USER_ORDER_STAGING s
+        INNER JOIN dbo.PS_DOC_HDR h ON CAST(s.CP_DOC_ID AS BIGINT) = h.DOC_ID
+        WHERE s.IS_APPLIED = 1
+          AND s.CP_DOC_ID IS NOT NULL
+          AND h.SHIP_DAT IS NOT NULL  -- Order has been shipped
+          AND s.ORD_STATUS IN ('processing', 'pending')  -- Not yet completed in WooCommerce
+        ORDER BY h.SHIP_DAT DESC
+    """
+    
+    return run_query(sql)
+
+def check_woocommerce_status(woo_order_id: int) -> str:
+    """Check current WooCommerce order status"""
+    try:
+        client = WooClient()
+        url = client._url(f"/orders/{woo_order_id}")
+        response = client.session.get(url, timeout=30)
+        
+        if response.ok:
+            order = response.json()
+            return order.get('status', 'unknown')
+        else:
+            logger.warning(f"Could not fetch WooCommerce order {woo_order_id}: {response.status_code}")
+            return 'unknown'
+    except Exception as e:
+        logger.error(f"Error checking WooCommerce status for order {woo_order_id}: {e}")
+        return 'unknown'
+
+def sync_fulfillment_to_woocommerce(dry_run: bool = True):
+    """
+    Sync fulfillment status from CounterPoint to WooCommerce.
+    
+    Finds orders that are shipped in CounterPoint (SHIP_DAT is set)
+    and updates WooCommerce status to 'completed'.
+    """
+    print("="*80)
+    print(f"{'DRY RUN - ' if dry_run else ''}SYNCING FULFILLMENT STATUS TO WOOCOMMERCE")
+    print("="*80)
+    
+    fulfilled_orders = find_fulfilled_orders()
+    
+    if not fulfilled_orders:
+        print("\n[INFO] No fulfilled orders found (all orders either not shipped or already completed)")
+        return 0, 0
+    
+    print(f"\nFound {len(fulfilled_orders)} orders that are shipped in CounterPoint")
+    
+    client = WooClient()
+    updated = 0
+    skipped = 0
+    
+    for order in fulfilled_orders:
+        woo_id = order['WOO_ORDER_ID']
+        doc_id = order['CP_DOC_ID']
+        tkt_no = order['TKT_NO']
+        ship_date = order['SHIP_DAT']
+        
+        # Check current WooCommerce status
+        current_status = check_woocommerce_status(woo_id)
+        
+        print(f"\nOrder #{woo_id} (CP: {tkt_no}):")
+        print(f"  Ship Date: {ship_date}")
+        print(f"  Current WooCommerce Status: {current_status}")
+        
+        # Only update if status is still 'processing' or 'pending'
+        if current_status in ('processing', 'pending'):
+            note = f"Order fulfilled and shipped from CounterPoint. Ship Date: {ship_date.strftime('%Y-%m-%d') if ship_date else 'N/A'}"
+            
+            if dry_run:
+                print(f"  [DRY RUN] Would update status to 'completed'")
+                updated += 1
+            else:
+                success, error_msg = client.update_order_status(
+                    order_id=woo_id,
+                    status='completed',
+                    note=note
+                )
+                
+                if success:
+                    print(f"  [OK] Status updated to 'completed'")
+                    updated += 1
+                else:
+                    print(f"  [ERROR] Failed to update: {error_msg}")
+                    skipped += 1
+        elif current_status == 'completed':
+            print(f"  [SKIP] Already completed in WooCommerce")
+            skipped += 1
+        else:
+            print(f"  [SKIP] Status is '{current_status}' (not processing/pending)")
+            skipped += 1
+    
+    print("\n" + "="*80)
+    print(f"SYNC COMPLETE")
+    print("="*80)
+    print(f"  Updated: {updated}")
+    print(f"  Skipped: {skipped}")
+    print(f"  Total: {len(fulfilled_orders)}")
+    
+    if dry_run:
+        print(f"\n[DRY RUN] No changes made. Run with --apply to update WooCommerce status.")
+    
+    return updated, skipped
+
+if __name__ == "__main__":
+    import sys
+    dry_run = '--apply' not in sys.argv
+    
+    sync_fulfillment_to_woocommerce(dry_run=dry_run)
