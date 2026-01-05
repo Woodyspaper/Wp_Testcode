@@ -796,15 +796,23 @@ def normalize_sku(sku: str) -> str:
     - Whitespace trimming
     - Case normalization (uppercase)
     - Common variations (hyphens, underscores)
+    - Unit suffix removal (e.g., -PACKAGE, -BOX, -EACH, -CARTON, -PALLET, -TON)
     """
     if not sku:
         return ''
     
     sku = sanitize_string(sku).upper()
     
-    # Remove common packaging suffixes that might differ
-    # e.g., "ITEM-100" vs "ITEM-100-BOX"
-    # Keep as-is for now, let the matching logic handle it
+    # Remove common unit/packaging suffixes that might differ between WooCommerce and CounterPoint
+    # CounterPoint often stores base SKU without unit suffix
+    # WooCommerce may have: 01-10251-PACKAGE, CounterPoint has: 01-10251
+    unit_suffixes = ['-PACKAGE', '-PK', '-BOX', '-BX', '-EACH', '-EA', 
+                     '-CARTON', '-CT', '-PALLET', '-PL', '-TON', '-CASE', '-CS']
+    
+    for suffix in unit_suffixes:
+        if sku.endswith(suffix):
+            sku = sku[:-len(suffix)]
+            break
     
     return sku
 
