@@ -56,34 +56,47 @@ def is_spam_customer(customer: Dict, orders: List[Dict] = None) -> tuple[bool, L
             reasons.append('Disposable email domain')
             is_spam = True
     
-    # Check missing company name
+    # Check missing company name (only flag if ALSO missing other required fields)
     if SPAM_CRITERIA['missing_company']:
         company = billing.get('company', '').strip() or shipping.get('company', '').strip()
         if not company:
-            reasons.append('Missing company name')
-            is_spam = True
+            # Only flag as spam if ALSO missing phone AND address (likely bot)
+            phone = billing.get('phone', '').strip() or shipping.get('phone', '').strip()
+            address_1 = billing.get('address_1', '').strip() or shipping.get('address_1', '').strip()
+            if not phone and not address_1:
+                reasons.append('Missing company name, phone, and address')
+                is_spam = True
     
-    # Check missing phone
+    # Check missing phone (only flag if ALSO missing address)
     if SPAM_CRITERIA['missing_phone']:
         phone = billing.get('phone', '').strip() or shipping.get('phone', '').strip()
         if not phone:
-            reasons.append('Missing phone number')
-            is_spam = True
+            address_1 = billing.get('address_1', '').strip() or shipping.get('address_1', '').strip()
+            if not address_1:
+                reasons.append('Missing phone and address')
+                is_spam = True
     
-    # Check missing address
+    # Check missing address (only flag if ALSO no orders)
     if SPAM_CRITERIA['missing_address']:
         address_1 = billing.get('address_1', '').strip() or shipping.get('address_1', '').strip()
         if not address_1:
-            reasons.append('Missing address')
-            is_spam = True
+            if orders is None:
+                orders = []
+            if len(orders) == 0:
+                reasons.append('Missing address and no orders')
+                is_spam = True
     
-    # Check no orders
+    # Check no orders (only flag if ALSO missing multiple required fields)
     if SPAM_CRITERIA['no_orders']:
         if orders is None:
             orders = []
         if len(orders) == 0:
-            reasons.append('No orders placed')
-            is_spam = True
+            # Only flag as spam if ALSO missing company AND phone (likely bot)
+            company = billing.get('company', '').strip() or shipping.get('company', '').strip()
+            phone = billing.get('phone', '').strip() or shipping.get('phone', '').strip()
+            if not company and not phone:
+                reasons.append('No orders and missing company/phone')
+                is_spam = True
     
     # Check suspicious email patterns
     if SPAM_CRITERIA['suspicious_email']:
@@ -169,11 +182,14 @@ def list_spam_customers(dry_run: bool = True) -> List[Dict]:
     customers = get_existing_woo_customers_full(client)
     print(f"Total customers: {len(customers)}\n")
     
+    print("Checking customers for spam criteria...")
+    print("(This may take a minute - checking orders for each customer)\n")
+    
     spam_customers = []
     
     for i, customer in enumerate(customers, 1):
-        if i % 50 == 0:
-            print(f"  Checking customer {i}/{len(customers)}...")
+        if i % 10 == 0 or i == 1:
+            print(f"  Checking customer {i}/{len(customers)}...", end='\r')
         
         # Get customer orders
         orders = get_customer_orders(client, customer['id'])
@@ -187,6 +203,8 @@ def list_spam_customers(dry_run: bool = True) -> List[Dict]:
                 'reasons': reasons,
                 'order_count': len(orders)
             })
+    
+    print(f"\n  Checked {len(customers)} customers" + " " * 20)  # Clear progress line
     
     print(f"\n{'='*60}")
     print(f"SPAM REGISTRATIONS FOUND: {len(spam_customers)}")
