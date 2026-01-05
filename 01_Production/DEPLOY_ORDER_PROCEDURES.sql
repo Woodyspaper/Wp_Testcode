@@ -255,8 +255,10 @@ BEGIN
             WHILE @TotalStart <= LEN(@LineItemsJSON) AND (SUBSTRING(@LineItemsJSON, @TotalStart, 1) = ' ' OR SUBSTRING(@LineItemsJSON, @TotalStart, 1) = ':')
                 SET @TotalStart = @TotalStart + 1;
             
-            -- Find the end of the total value (closing brace)
-            SET @TotalEnd = CHARINDEX('}', @LineItemsJSON, @TotalStart);
+            -- Find the end of the total value (comma or closing brace - comma comes first if there are more fields)
+            SET @TotalEnd = CHARINDEX(',', @LineItemsJSON, @TotalStart);
+            IF @TotalEnd = 0 OR @TotalEnd > CHARINDEX('}', @LineItemsJSON, @TotalStart)
+                SET @TotalEnd = CHARINDEX('}', @LineItemsJSON, @TotalStart);
             IF @TotalEnd = 0 BREAK;
             SET @Total = CAST(LTRIM(RTRIM(SUBSTRING(@LineItemsJSON, @TotalStart, @TotalEnd - @TotalStart))) AS DECIMAL(15,4));
             

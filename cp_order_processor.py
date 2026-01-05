@@ -325,7 +325,7 @@ def validate_order(staging_id: int) -> bool:
         
         return True
     else:
-        print(f"\n[✗] Order {staging_id} is INVALID")
+        print(f"\n[ERROR] Order {staging_id} is INVALID")
         print(f"    Error: {error_msg}")
         
         # Update validation error in staging table
@@ -402,7 +402,7 @@ def process_order(staging_id: int, validate_first: bool = True, retry_on_failure
     # Get order details for WooCommerce sync
     order_details = run_query(GET_ORDER_DETAILS_SQL, (staging_id,))
     if not order_details:
-        print(f"\n[✗] Order {staging_id} not found in staging")
+        print(f"\n[ERROR] Order {staging_id} not found in staging")
         return False
     
     order_info = order_details[0]
@@ -412,7 +412,7 @@ def process_order(staging_id: int, validate_first: bool = True, retry_on_failure
     if validate_first:
         is_valid, error_msg = validate_staged_order(staging_id)
         if not is_valid:
-            print(f"\n[✗] Validation failed: {error_msg}")
+            print(f"\n[ERROR] Validation failed: {error_msg}")
             print(f"    Order will not be processed.")
             # Update error in staging
             conn = get_connection()
@@ -454,11 +454,11 @@ def process_order(staging_id: int, validate_first: bool = True, retry_on_failure
             if sync_order_status_to_woocommerce(woo_order_id, doc_id, tkt_no):
                 print(f"[OK] Order status synced to WooCommerce")
             else:
-                print(f"[⚠] Warning: Failed to sync order status to WooCommerce (order still created in CP)")
+                print(f"[WARNING] Failed to sync order status to WooCommerce (order still created in CP)")
             
             return True
         else:
-            print(f"\n[✗] Order creation failed (attempt {attempt}/{max_attempts})")
+            print(f"\n[ERROR] Order creation failed (attempt {attempt}/{max_attempts})")
             print(f"    Error: {error_msg}")
             
             # Update error in staging
@@ -477,7 +477,7 @@ def process_order(staging_id: int, validate_first: bool = True, retry_on_failure
             
             # If this was the last attempt, return False
             if attempt == max_attempts:
-                print(f"\n[✗] Order creation failed after {max_attempts} attempts")
+                print(f"\n[ERROR] Order creation failed after {max_attempts} attempts")
                 return False
     
     return False
