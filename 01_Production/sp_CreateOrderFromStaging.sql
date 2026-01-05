@@ -40,6 +40,18 @@ BEGIN
     DECLARE @ShipAmt DECIMAL(15,4);
     DECLARE @ShipViaCod VARCHAR(10);
     DECLARE @LineItemsJSON NVARCHAR(MAX);
+    -- Shipping address fields
+    DECLARE @ShipNam VARCHAR(40);
+    DECLARE @ShipAdrs1 VARCHAR(40);
+    DECLARE @ShipAdrs2 VARCHAR(40);
+    DECLARE @ShipCity VARCHAR(20);
+    DECLARE @ShipState VARCHAR(10);
+    DECLARE @ShipZipCod VARCHAR(15);
+    DECLARE @ShipCntry VARCHAR(20);
+    DECLARE @ShipPhone VARCHAR(25);
+    DECLARE @CustEmail VARCHAR(100);
+    DECLARE @ShipAdrsId VARCHAR(10);
+    DECLARE @ShipToContactId TINYINT;
     DECLARE @StrId VARCHAR(10) = '01';
     DECLARE @StaId VARCHAR(10) = '101';
     DECLARE @DocTyp VARCHAR(1) = 'O';
@@ -72,7 +84,7 @@ BEGIN
             RETURN;
         END
         
-        -- Get staging data
+        -- Get staging data (including shipping address)
         SELECT 
             @CustNo = CUST_NO,
             @OrdDat = ORD_DAT,
@@ -82,7 +94,16 @@ BEGIN
             @TotAmt = TOT_AMT,
             @ShipAmt = SHIP_AMT,
             @ShipViaCod = LEFT(SHIP_VIA, 10),
-            @LineItemsJSON = LINE_ITEMS_JSON
+            @LineItemsJSON = LINE_ITEMS_JSON,
+            @ShipNam = SHIP_NAM,
+            @ShipAdrs1 = SHIP_ADRS_1,
+            @ShipAdrs2 = SHIP_ADRS_2,
+            @ShipCity = SHIP_CITY,
+            @ShipState = SHIP_STATE,
+            @ShipZipCod = SHIP_ZIP_COD,
+            @ShipCntry = ISNULL(SHIP_CNTRY, 'US'),
+            @ShipPhone = SHIP_PHONE,
+            @CustEmail = CUST_EMAIL
         FROM dbo.USER_ORDER_STAGING
         WHERE STAGING_ID = @StagingID;
         
@@ -111,15 +132,62 @@ BEGIN
         
         SET @TktNo = @StaId + '-' + RIGHT('000000' + CAST(@TktNoSuffix AS VARCHAR), 6);
         
+        -- Create or find ship-to address in AR_SHIP_ADRS
+        -- First, check if a matching ship-to address already exists
+        SELECT TOP 1 @ShipAdrsId = SHIP_ADRS_ID
+        FROM dbo.AR_SHIP_ADRS
+        WHERE CUST_NO = @CustNo
+          AND ADRS_1 = @ShipAdrs1
+          AND CITY = @ShipCity
+          AND STATE = @ShipState
+        ORDER BY SHIP_ADRS_ID;
+        
+        -- If no matching address found, create a new one
+        IF @ShipAdrsId IS NULL AND @ShipNam IS NOT NULL AND @ShipAdrs1 IS NOT NULL
+        BEGIN
+            -- Generate next SHIP_ADRS_ID for this customer
+            DECLARE @NextShipId INT;
+            SELECT @NextShipId = ISNULL(MAX(TRY_CAST(SHIP_ADRS_ID AS INT)), 0) + 1
+            FROM dbo.AR_SHIP_ADRS
+            WHERE CUST_NO = @CustNo
+              AND TRY_CAST(SHIP_ADRS_ID AS INT) IS NOT NULL;
+            
+            SET @ShipAdrsId = CAST(@NextShipId AS VARCHAR(10));
+            
+            -- Insert ship-to address
+            INSERT INTO dbo.AR_SHIP_ADRS (
+                CUST_NO, SHIP_ADRS_ID, NAM, NAM_UPR,
+                ADRS_1, ADRS_2, CITY, STATE, ZIP_COD, CNTRY,
+                PHONE_1
+            )
+            VALUES (
+                @CustNo, @ShipAdrsId, 
+                LEFT(LTRIM(RTRIM(ISNULL(@ShipNam, ''))), 40),
+                UPPER(LEFT(LTRIM(RTRIM(ISNULL(@ShipNam, ''))), 40)),
+                LEFT(LTRIM(RTRIM(ISNULL(@ShipAdrs1, ''))), 40),
+                LEFT(LTRIM(RTRIM(ISNULL(@ShipAdrs2, ''))), 40),
+                LEFT(LTRIM(RTRIM(ISNULL(@ShipCity, ''))), 20),
+                LEFT(UPPER(LTRIM(RTRIM(ISNULL(@ShipState, '')))), 10),
+                LEFT(LTRIM(RTRIM(ISNULL(@ShipZipCod, ''))), 15),
+                LEFT(UPPER(LTRIM(RTRIM(ISNULL(@ShipCntry, 'US')))), 20),
+                LEFT(LTRIM(RTRIM(ISNULL(@ShipPhone, ''))), 25)
+            );
+        END
+        
+        -- Set SHIP_TO_CONTACT_ID (tinyint - typically 1 for first ship-to, 2 for second, etc.)
+        -- For now, use 1 if we have a ship-to address
+        IF @ShipAdrsId IS NOT NULL
+            SET @ShipToContactId = 1;
+        
         -- Insert with explicit DOC_ID, TKT_NO, and DOC_GUID (GUID is required)
         INSERT INTO dbo.PS_DOC_HDR (
             DOC_ID, DOC_GUID, DOC_TYP, STR_ID, STA_ID, CUST_NO, TKT_DT, TKT_NO,
-            SHIP_VIA_COD, STK_LOC_ID, PRC_LOC_ID,
+            SHIP_VIA_COD, SHIP_TO_CONTACT_ID, STK_LOC_ID, PRC_LOC_ID,
             ORD_LINS, SAL_LINS, SAL_LIN_TOT
         )
         VALUES (
             @DocID, NEWID(), @DocTyp, @StrId, @StaId, @CustNo, @TktDt, @TktNo,
-            @ShipViaCod, @StrId, @StrId,
+            @ShipViaCod, @ShipToContactId, @StrId, @StrId,
             0, 0, 0
         );
         
