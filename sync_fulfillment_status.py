@@ -16,6 +16,7 @@ def find_fulfilled_orders():
     
     Returns list of orders ready to mark as completed:
     - Order has SHIP_DAT set (not NULL) = shipped
+    - Order has valid shipping information (SHIP_TO_CONTACT_ID and AR_SHIP_ADRS)
     - WooCommerce order status is still 'processing' (not yet completed)
     """
     sql = """
@@ -24,13 +25,27 @@ def find_fulfilled_orders():
             s.CP_DOC_ID,
             h.TKT_NO,
             h.SHIP_DAT,
-            h.TKT_DT
+            h.TKT_DT,
+            ship.NAM AS SHIP_NAME,
+            ship.ADRS_1 AS SHIP_ADDRESS,
+            ship.CITY AS SHIP_CITY,
+            ship.STATE AS SHIP_STATE,
+            ship.ZIP_COD AS SHIP_ZIP
         FROM dbo.USER_ORDER_STAGING s
         INNER JOIN dbo.PS_DOC_HDR h ON TRY_CAST(s.CP_DOC_ID AS BIGINT) = h.DOC_ID
+        LEFT JOIN dbo.AR_SHIP_ADRS ship ON ship.CUST_NO = h.CUST_NO 
+            AND ship.SHIP_ADRS_ID = CAST(h.SHIP_TO_CONTACT_ID AS VARCHAR(10))
         WHERE s.IS_APPLIED = 1
           AND s.CP_DOC_ID IS NOT NULL
           AND TRY_CAST(s.CP_DOC_ID AS BIGINT) IS NOT NULL  -- Valid numeric DOC_ID
           AND h.SHIP_DAT IS NOT NULL  -- Order has been shipped
+          AND h.SHIP_TO_CONTACT_ID IS NOT NULL  -- Has shipping contact
+          AND ship.SHIP_ADRS_ID IS NOT NULL  -- Shipping address exists
+          AND ship.NAM IS NOT NULL  -- Has name
+          AND ship.ADRS_1 IS NOT NULL  -- Has address line 1
+          AND ship.CITY IS NOT NULL  -- Has city
+          AND ship.STATE IS NOT NULL  -- Has state
+          AND ship.ZIP_COD IS NOT NULL  -- Has ZIP code
         ORDER BY h.SHIP_DAT DESC
     """
     
@@ -85,8 +100,16 @@ def sync_fulfillment_to_woocommerce(dry_run: bool = True):
         # Check current WooCommerce status
         current_status = check_woocommerce_status(woo_id)
         
+        # Get shipping info for validation display
+        ship_name = order.get('SHIP_NAME', 'N/A')
+        ship_address = order.get('SHIP_ADDRESS', 'N/A')
+        ship_city = order.get('SHIP_CITY', 'N/A')
+        ship_state = order.get('SHIP_STATE', 'N/A')
+        ship_zip = order.get('SHIP_ZIP', 'N/A')
+        
         print(f"\nOrder #{woo_id} (CP: {tkt_no}):")
         print(f"  Ship Date: {ship_date}")
+        print(f"  Shipping To: {ship_name}, {ship_address}, {ship_city}, {ship_state} {ship_zip}")
         print(f"  Current WooCommerce Status: {current_status}")
         
         # Only update if status is still 'processing' or 'pending' (not already completed)

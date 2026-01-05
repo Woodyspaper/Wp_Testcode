@@ -56,11 +56,41 @@ try {
 
 # Find fulfillment sync script
 $syncScript = Join-Path $scriptDir "sync_fulfillment_status.py"
+$checkScript = Join-Path $scriptDir "check_fulfillment_sync_needed.py"
+
 if (-not (Test-Path $syncScript)) {
     Log "ERROR: Script not found: $syncScript"
     exit 1
 }
 Log "Sync script: $syncScript"
+
+# Check if sync is needed (smart check logic)
+Log "Checking if fulfillment status sync is needed..."
+if (Test-Path $checkScript) {
+    try {
+        $checkOutput = & $pythonExe $checkScript 2>&1
+        $checkOutput | ForEach-Object { Log $_ }
+        $checkExitCode = $LASTEXITCODE
+        
+        if ($checkExitCode -eq 1) {
+            # Sync not needed
+            Log "============================================================"
+            Log "SKIPPED: Fulfillment status sync not needed at this time"
+            Log "Reason: No shipped orders with valid shipping info or too soon for periodic check"
+            Log "============================================================"
+            Log "Completed at: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+            Log "Log file: $logPath"
+            exit 0
+        }
+        # Exit code 0 means sync is needed, continue below
+        Log "Sync is needed - proceeding..."
+    } catch {
+        Log "WARNING: Could not check sync conditions, proceeding with sync: $_"
+        # On error, default to syncing (safe fallback)
+    }
+} else {
+    Log "WARNING: check_fulfillment_sync_needed.py not found, proceeding with sync"
+}
 
 # Run fulfillment status sync
 Log "Starting fulfillment status sync..."
