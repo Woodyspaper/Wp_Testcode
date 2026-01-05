@@ -26,11 +26,11 @@ def find_fulfilled_orders():
             h.SHIP_DAT,
             h.TKT_DT
         FROM dbo.USER_ORDER_STAGING s
-        INNER JOIN dbo.PS_DOC_HDR h ON CAST(s.CP_DOC_ID AS BIGINT) = h.DOC_ID
+        INNER JOIN dbo.PS_DOC_HDR h ON TRY_CAST(s.CP_DOC_ID AS BIGINT) = h.DOC_ID
         WHERE s.IS_APPLIED = 1
           AND s.CP_DOC_ID IS NOT NULL
+          AND TRY_CAST(s.CP_DOC_ID AS BIGINT) IS NOT NULL  -- Valid numeric DOC_ID
           AND h.SHIP_DAT IS NOT NULL  -- Order has been shipped
-          AND s.ORD_STATUS IN ('processing', 'pending')  -- Not yet completed in WooCommerce
         ORDER BY h.SHIP_DAT DESC
     """
     
@@ -89,9 +89,17 @@ def sync_fulfillment_to_woocommerce(dry_run: bool = True):
         print(f"  Ship Date: {ship_date}")
         print(f"  Current WooCommerce Status: {current_status}")
         
-        # Only update if status is still 'processing' or 'pending'
+        # Only update if status is still 'processing' or 'pending' (not already completed)
         if current_status in ('processing', 'pending'):
-            note = f"Order fulfilled and shipped from CounterPoint. Ship Date: {ship_date.strftime('%Y-%m-%d') if ship_date else 'N/A'}"
+            # Format ship date safely (handle datetime objects from SQL Server)
+            if ship_date:
+                if hasattr(ship_date, 'strftime'):
+                    ship_date_str = ship_date.strftime('%Y-%m-%d')
+                else:
+                    ship_date_str = str(ship_date)[:10]  # First 10 chars (YYYY-MM-DD)
+            else:
+                ship_date_str = 'N/A'
+            note = f"Order fulfilled and shipped from CounterPoint. Ship Date: {ship_date_str}"
             
             if dry_run:
                 print(f"  [DRY RUN] Would update status to 'completed'")
