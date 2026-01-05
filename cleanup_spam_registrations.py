@@ -27,6 +27,21 @@ SPAM_CRITERIA = {
     'suspicious_username': True,   # Suspicious username patterns
 }
 
+# Exclude these from spam detection (test accounts, known legitimate customers)
+EXCLUDE_FROM_SPAM = {
+    'customer1@testing.com',
+    'customer2@testing.com',
+    'customer3@testing.com',
+    'customer4@testing.com',
+    'customer5@testing.com',
+    'customer6@testing.com',
+    'customer7@testing.com',
+    'customer8@testing.com',
+    'customer9@testing.com',
+    'admin@woodyspaper.com',  # Admin account
+    'tim@northshoreprinting.com',  # Verify before deleting
+}
+
 # Recent registration threshold (days)
 RECENT_DAYS = 30
 
@@ -41,10 +56,15 @@ def is_spam_customer(customer: Dict, orders: List[Dict] = None) -> tuple[bool, L
     Returns:
         Tuple of (is_spam, reasons)
     """
+    email = customer.get('email', '').strip().lower()
+    
+    # Skip excluded accounts (test accounts, known legitimate customers)
+    if email in EXCLUDE_FROM_SPAM:
+        return False, ['Excluded from spam detection (test account or known legitimate)']
+    
     reasons = []
     is_spam = False
     
-    email = customer.get('email', '').strip().lower()
     username = customer.get('username', '').strip().lower()
     billing = customer.get('billing', {})
     shipping = customer.get('shipping', {})

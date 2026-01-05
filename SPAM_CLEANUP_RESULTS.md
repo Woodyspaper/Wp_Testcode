@@ -128,15 +128,16 @@ DELETE FROM wp_users WHERE user_email IN (
 
 ### **1. Test Customers (IDs 2-10)**
 
-These appear to be test accounts (`customer1@testing.com`, etc.) with tier roles. **Recommendation:**
-- If they're test accounts, delete via WordPress Admin
-- If they're needed for testing, keep them but note they're test accounts
+These are **test accounts** (`customer1@testing.com`, etc.) with tier roles. **Status:**
+- ✅ **EXCLUDED from spam detection** - These are intentional test accounts
+- **Action:** Keep them for testing purposes
+- **Note:** Script now automatically excludes these from spam detection
 
 ### **2. Legitimate Customers?**
 
 **Verify before deleting:**
-- ID 383: `admin@woodyspaper.com` - **May be admin account - DO NOT DELETE**
-- ID 425: `tim@northshoreprinting.com` - **Verify if legitimate customer**
+- ID 383: `admin@woodyspaper.com` - ✅ **EXCLUDED** - Admin account (not spam)
+- ID 425: `tim@northshoreprinting.com` - ⚠️ **VERIFY** - May be legitimate customer (excluded from spam detection, but verify before any action)
 
 ### **3. Bot Registrations**
 
@@ -149,10 +150,15 @@ These appear to be test accounts (`customer1@testing.com`, etc.) with tier roles
 
 ## ✅ **NEXT STEPS**
 
-1. **Review remaining errors:**
-   - Check if test customers (IDs 2-10) should be kept
-   - Verify admin@woodyspaper.com is not accidentally flagged
-   - Confirm tim@northshoreprinting.com status
+1. **Test accounts (IDs 2-10):**
+   - ✅ **No action needed** - These are excluded from spam detection
+   - Script automatically skips test accounts
+
+2. **Verify tim@northshoreprinting.com:**
+   - ⚠️ **Verify if legitimate customer** before any deletion
+   - Currently excluded from spam detection
+   - If legitimate, no action needed
+   - If spam, can delete via WordPress Admin
 
 2. **Delete via WordPress Admin:**
    - Go to Users → Search for email addresses
