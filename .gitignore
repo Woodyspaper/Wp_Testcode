@@ -19,10 +19,12 @@ build/
 .venv
 venv/
 ENV/
-*secret*
-*password*
-*credential*
-*api_key*
+
+# Sensitive files (be careful with patterns - these are just examples)
+# *secret*
+# *password*
+# *credential*
+# *api_key*
 
 # IDE
 .vscode/
